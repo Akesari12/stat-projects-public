@@ -1,0 +1,170 @@
+---
+title: "Extra Code"
+author: "Aniket Kesari"
+date: "September 10, 2017"
+output: html_document
+---
+
+Original Data Load In
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+# Read in Data
+sonoma_data_all <- read_csv("sonoma-data-all.csv")
+sonoma_data_log <- read_csv("sonoma-data-log.csv")
+sonoma_data_net <- read_csv("sonoma-data-net.csv")
+mote_location_data <- read.table("mote-location-data.txt", header=TRUE)
+
+# Separate Date and Time
+sonoma_data_all$result_time <- as.POSIXct(sonoma_data_all$result_time, format="%Y-%m-%d %H:%M:%S")
+sonoma_data_all <- sonoma_data_all %>% separate(result_time, into = c("Date", "Time"), sep = " ", remove=FALSE)
+sonoma_data_all$Date <- as.Date(sonoma_data_all$Date, format="%Y-%m-%d")
+```
+
+Wrong Humidity Readings
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+redwood_master %>%
+  ggplot() + geom_point(aes(x=humidity, y=humid_temp)) + geom_point(data=(redwood_master%>%filter(humidity < 0)), aes(x=humidity, y=humid_temp, color="red")) + ggtitle("Raw Temperature vs. Humidity") + xlab("Humidity") + ylab("Temperature (F)")
+```
+
+Original Date/Time cleaning
+```{r}
+# Separate Date and Time
+## Format "result_time" as a datetime
+sonoma_data_all$result_time <- as.POSIXct(sonoma_data_all$result_time, format="%Y-%m-%d %H:%M:%S")
+## Create Date and Time Columns with "separate" function
+sonoma_data_all <- sonoma_data_all %>% separate(result_time, into = c("Date", "Time"), sep = " ", remove=FALSE)
+## "Date" as a Date (cannot format Time without Date info)
+sonoma_data_all$Date <- as.Date(sonoma_data_all$Date, format="%Y-%m-%d")
+```
+
+Test to see if net + log data actually adds up to full data (it does not)
+```{r}
+sonoma_data_test <- sonoma_data_net %>%
+                      bind_rows(sonoma_data_log)
+
+sonoma_data_test2 <- sonoma_data_all %>% 
+                      intersect(sonoma_data_test)
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# Raw Data Temp vs. Sunlight
+ggplot() + geom_point(data=redwood_master, aes(x=hamatop, humid_temp, color = humidity)) + ggtitle("Temperature vs. Sunlight with Humidity Color in Raw Data") + xlab("Sunlight") + ylab("Temperature") 
+
+# Remove extreme temperature and sunlight
+redwood_master %>% filter(humid_temp < 600, hamatop < 20000000) %>%
+  ggplot() + geom_point(aes(x=hamatop, humid_temp, color = humidity)) +   ggtitle("Temperature vs. Sunlight with Humidity Color Without Extreme Outlier") +   xlab("Sunlight") + ylab("Temperature") 
+
+# Temps Below 50 
+redwood_master %>% filter(humid_temp < 50, hamatop < 20000000) %>%
+  ggplot() + geom_point(aes(x=hamatop, humid_temp, color = humidity)) + ggtitle("Temperature (Below 50) vs. Sunlight With Humidity Color") + xlab("Sunlight") + ylab("Temperature")
+
+# Visualize Voltage vs. Epoch in the 200s-300s range
+redwood_master %>%
+  filter(voltage > 100 & voltage < 1000) %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage, color=humidity)) + ggtitle("Voltage (200s) vs. Epoch") + xlab("Epoch") + ylab("Voltage (Microvolts")
+
+## Low voltage vs. Node ID
+redwood_master %>%
+  filter(voltage < 100 & nodeid <60000) %>%
+  ggplot() + geom_point(aes(x=nodeid, y=voltage)) + ggtitle("Low Voltage vs. Node ID") + xlab("Node ID") + ylab("Voltage (volts)")
+
+# Adjusted Voltage vs. Node ID
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000) %>%
+  ggplot() + geom_point(aes(x=nodeid, y=voltage_adj, color=humidity)) +   ggtitle("Adjusted Voltage vs. Node ID") + xlab("Node ID") + ylab("Adjusted Voltage (Volts)")
+
+# Adjusted Voltage vs. Epoch
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=humidity)) + ggtitle("Adjusted Voltage vs. Epoch") + xlab("Epoch") + ylab("Adjusted Voltage (Volts)")
+
+# Adjust Voltage vs. Humidity
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=humidity, y=voltage_adj)) + ggtitle("Adjusted Voltage vs. Humidity") + xlab("Humidity") + ylab("Adjusted Voltage (Volts)")
+
+# Facet Wrap for Nodes 1-30
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0 & nodeid < 30) %>%
+  ggplot() + geom_point(aes(x=humidity, y=voltage_adj)) +   
+  facet_wrap(~nodeid) + ggtitle("Facet Wrap 1-30 Adjusted Voltage vs. Humidity") + xlab("Humidity") + ylab("Adjusted Voltage (Volts)")
+
+# Facet Wrap for Nodes 1-30
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0 & nodeid < 30)   %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=humidity)) +    facet_wrap(~nodeid) + ggtitle("Facet Wrap 1-30 Adjusted Voltage vs. Epoch") + xlab("Epoch") + ylab("Adjusted Voltage (Volts)")
+
+# Facet Wrap for Nodes 31-75
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0 & nodeid > 30 & nodeid < 75)   %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=humidity)) +    facet_wrap(~nodeid) + ggtitle("Facet Wrap 31-60 Adjusted Voltage vs. Epoch") + xlab("Epoch") + ylab("Adjusted Voltage (Volts)")
+
+# Facet Wrap for Nodes 75-122
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0 & nodeid > 75 & nodeid < 122)   %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=humidity)) +    facet_wrap(~nodeid) + ggtitle("Facet Wrap 31-60 Adjusted Voltage vs. Epoch") + xlab("Epoch") + ylab("Adjusted Voltage (Volts)")
+
+# Facet Wrap for Nodes 123-200
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0 & nodeid > 122 & nodeid < 200)   %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=humidity)) +    facet_wrap(~nodeid) + ggtitle("Facet Wrap 31-60 Adjusted Voltage vs. Epoch") + xlab("Epoch") + ylab("Adjusted Voltage (Volts)")
+
+# Adjusted Voltage vs. Epoch with Temp. Color
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=humid_temp))
+
+# Humidity vs. Adjusted Voltage with Epoch Color
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=voltage_adj, y=humidity, color=epoch))
+
+# Voltage (less than 10) vs. Epoch
+redwood_master %>%
+  filter(voltage < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage, color=humidity))
+
+# Voltage (less than 10) vs. Humidity
+redwood_master %>%
+  filter(voltage < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=humidity, y=voltage, color=humidity))
+
+# Voltage (less than 10) vs. Epoch with Height Color
+redwood_master %>%
+  filter(voltage < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage, color=Height))
+
+# Adjusted Voltage vs. Epoch with Height Color
+redwood_master %>%
+  filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+  ggplot() + geom_point(aes(x=epoch, y=voltage_adj, color=Height))
+``` 
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# Humidity vs. Epoch, Height Color
+redwood_master %>%
+    filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+    ggplot() + geom_point(aes(x=epoch, y=humidity, color=Height)) +
+    ggtitle("Humidity vs. Epoch, Height Color") + xlab("Epoch") + ylab("Humidity")
+
+## Mean Humidity vs. Height
+redwood_master %>%
+    filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+    ggplot()  + stat_summary_bin(aes(x=Height, y = humidity), fun.y = "mean", geom="point") + geom_smooth(method="lm", aes(x=Height, y=humidity)) + ggtitle("Mean Humidity vs. Height, Linear Model") + xlab("Height") + ylab("Mean Humidity per Node")
+
+### No Voltage Outliers
+redwood_master %>%
+    filter(voltage < 10 & nodeid < 60000 & humidity > 0) %>%
+    ggplot()  + stat_summary_bin(aes(x=Height, y = humidity), fun.y = "mean", geom="point") + geom_smooth(method="lm", aes(x=Height, y=humidity)) + ggtitle("Mean Humidity vs. Height, Linear Model") + xlab("Height") + ylab("Mean Humidity per Node")
+
+## Humidity vs. Sunlight
+redwood_master %>%
+    filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+    ggplot() + stat_summary_bin(aes(x=hamatop, y=humidity), fun.y = "mean", geom="point") + geom_smooth(method="lm", aes(x=hamatop, y=humidity)) + ggtitle("Mean Humidity vs. Top Sunlight") + xlab("Sunlight") + ylab("Mean Humidity")
+
+## Humidity vs. Temperature
+redwood_clean %>%
+    filter(voltage_adj < 10 & nodeid < 60000 & humidity > 0) %>%
+    ggplot() + geom_point(aes(x=humid_temp, y=humidity,               color=Height)) + ggtitle("Humidity vs. Temperature, Shaded by Height") + xlab("Temperature") + ylab("Humidity")
+```

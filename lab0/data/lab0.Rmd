@@ -1,0 +1,73 @@
+---
+title: "Lab 0"
+author: "Aniket Kesari"
+date: "August 28, 2017"
+output: pdf_document
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Load Data and Packages
+library(tidyverse)
+setwd("C:/Users/Anike/Dropbox/Homework/Fall 2017/Statistical Models Theory and Application/lab0")
+USArrests <- USArrests
+stateCoord <- read.table("C:/Users/Anike/STAT-215A-Fall-2017/week1/data/stateCoord.txt")
+USArrests <- USArrests %>% mutate(State = rownames(USArrests)) # Add state column by mutating a new variable based on the rownames
+stateCoord <- stateCoord %>% mutate(State = rownames(stateCoord)) 
+GeoUSArrests <- USArrests %>% # Join data
+                  full_join(stateCoord)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+GeoUSArrests %>%
+  ggplot() + geom_point(aes(x=Murder, y=Assault)) + ggtitle("Murder vs. Assault Scatterplot") + xlab("Murder") + ylab("Assault")
+
+GeoUSArrests %>%
+  ggplot() + geom_point(aes(x=UrbanPop, y=Rape)) + geom_point(data=GeoUSArrests[2, ], aes(x=UrbanPop, y=Rape), colour = "red") + ggtitle("Urban Population vs. Rape Scatterplot with Outlier") + xlab("Urban Population") + ylab("Rape")
+
+GeoUSArrests %>%
+  ggplot() + geom_point(aes(x=UrbanPop, y=Rape)) + geom_text(aes(x=UrbanPop, y=Rape, label=State), nudge_y = -1)+ geom_point(data=GeoUSArrests[2, ], aes(x=UrbanPop, y=Rape), colour="red") + ggtitle("Urban Population vs. Rape With Labels") + xlab("Urban Population") + ylab("Rape") 
+
+library(maps)
+library(mapproj)
+
+states <- map_data("state")
+map.df <- GeoUSArrests %>%
+            mutate(region = State) %>%
+            full_join(states, by="region")
+GeoUSArrests <- GeoUSArrests %>% mutate(region = tolower(State))
+map.df <- GeoUSArrests %>% full_join(states, by="region")
+map.df <- map.df[order(map.df$order), ]
+map.df %>%
+  ggplot(aes(long.y, lat, group=group)) +
+  geom_polygon(aes(fill=Rape)) +
+  geom_path() +
+  scale_fill_gradientn(colours=rev(heat.colors(10)), na.value="grey90") +
+  coord_map() +
+  ggtitle("Cholorpleth Map of Rape Rates in the United States") + xlab("Longitude") + ylab("Latitude")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Run the model and summarize
+GeoUSArrests <- GeoUSArrests %>% na.omit(Rape)
+UrbRapModel <- lm(UrbanPop~Rape, data=GeoUSArrests)
+summary(UrbRapModel)
+
+# Predicted vs. Residuals
+GeoUSArrests$predicted <- predict(UrbRapModel)
+GeoUSArrests$residuals <- residuals(UrbRapModel)
+ggplot() + geom_point(data=GeoUSArrests, aes(x=predicted, y=residuals))
+
+# Add best fit line
+GeoArrestsNoOut <- GeoUSArrests %>%
+        filter(State != "Alaska") 
+
+GeoUSArrests %>%
+          ggplot(aes(x=UrbanPop, y=Rape)) +
+          geom_smooth(method = "lm", se=FALSE, color = "blue") +
+          geom_point() +
+          geom_segment(aes(xend = UrbanPop, yend = predicted), alpha = .2) +
+          geom_point(aes(y=predicted), shape = 1) +
+          geom_smooth(data=GeoArrestsNoOut, aes(x=UrbanPop, y=Rape), method = "lm", se=FALSE, color = "red") +
+          theme_bw() +
+          ggtitle("Rape vs. Urban Population Models with Residuals") + xlab("Urban Population") + ylab("Rape")
+```

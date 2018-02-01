@@ -1,0 +1,729 @@
+---
+title: 'Lab 4: Cloud Detection'
+author: |
+  | Aniket Kesari, UC Berkeley Law 25948127
+  | Mingjia Chen, UC Berkeley Stats 3032130297
+  | Xiaoqi Zhang, UC Berkeley Stats 3032129569
+date: "October 31, 2017"
+output:
+  pdf_document:
+    number_sections: yes
+  html_document: default
+header-includes: \usepackage{float}
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Load packages
+## Readr for read_table to quickly load big .txt files
+library(readr)
+library(tidyverse)
+library(gridExtra)
+library(caret)
+library(nnet)
+library(mlbench)
+library(RCurl)
+library(GGally)
+library(knitr)
+library(pROC)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+## Set working directory and flatten images
+knitr::opts_knit$set(root.dir = "~/lab4-cloud")
+knitr::opts_chunk$set(dev = 'png', dpi = 300, echo=FALSE, message=FALSE, 
+                      warning=FALSE, cache = TRUE, fig.pos = "H")
+opts_knit$set(eval.after='fig.cap')
+cap <- function () {
+    p <- last_plot()
+    if (!is.null(p) && !is.null(p$labels$title)) {
+        paste('Figure:', p$labels$title)
+    } else {
+        NULL # null caption
+    }
+}
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# loading all image data. These rds files were created in load_clean_data.R 
+image_1 <- readRDS("R/image_1.rds")
+image_2 <- readRDS("R/image_2.rds")
+image_3 <- readRDS("R/image_3.rds")
+
+# all_image only contain data points from image 1 and 2, because we
+# want to use image 1 and 2 for training only
+# and saved image 3 for training
+# all_image was created in load_clean_data.R as well
+all_image <- readRDS( "R/all_image.rds")
+```
+
+# Introduction
+
+This lab examines the data from "Daytime Arctic Cloud Detection Based on Multi-Angle Satellite Data With Case Studies" by Shi et. al. In this study, the authors are concerned with developing an algorithmic approach for detecting clouds in images taken of the Arctic region. The fundamental problem is that at high latitudes, clouds are hard to distinguish from surrounding snow and ice in satellite imagery because the white surfaces are similarly reflective. 
+
+In this lab, we explore the data to evaluate the authors' choice of model features, and develop our own predictive algoirthms. Fundamentally, this is a "classification" problem, which is an example of a "supervised learning" model. This approach differs from the unsupervised clustering through distance similarities because we are interested in using known covariates to predict out-of-sample outcomes, rather than look for for patterns in an underlying data structure.
+
+# Exploratory Data Analysis
+
+The first step in this sort of statistical analysis is an exploration of the data. In this stage, we are interested in replicating the pre-labeled plots of the three images in the paper, and exploring the relationships between the features and the "angular radiances" recorded by the satellite camera.
+
+## Map the Presence or Absence of Clouds
+
+First, we recreate the plots by using the XY-coordinate pairs provided in the data, and shading each point with its expert label. Curiously, only Images 1 and 2 are reproducible compared to the original paper. "Image 3" does not look similar to the one in the paper.  
+
+```{r, fig.cap="Mapping Clouds with original labels", fig.height=3, fig.width=9}
+plot_1 <- ggplot(data = image_1, aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 1") + 
+  xlab("") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "null"
+        ) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+plot_2 <- ggplot(data = image_2, aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 2") + 
+  xlab("X-Coordinate") +
+  ylab("") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "null"
+        ) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+plot_3 <- ggplot(data = image_3, aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 3") + 
+  xlab("") +
+  ylab("") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        legend.position = "right",
+        legend.title = element_blank()) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(plot_1, plot_2, plot_3, ncol = 3, widths=c(1,1,1.5))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+## Row bind images 1 and 2 for training - we created all_image to train model
+## Leave out image 3 for testing
+test_image <- image_3
+```
+
+## Differences Between the Two Classes
+
+Before we go in depth to discuss the relationship between the radiances of angles, first, we explore the relationship between the expert labels against the Angle Radiances with the boxplot Figure 2. It is easy to notice that the "clear" points are mostly concentrated around 200 and 300 radiances, while "cloud" labeled points are more concentrated around 100-250 radiances.
+
+From the below figure we could also see that:
+
+* `clear` labeled points are highly right skewed
+* `clear` labeled points generally have higher value than `cloud` labeled points
+* For angle DF, the `clear` and `cloud` are very close to each other. This indictes that angle DF might not be an ideal feature to classify the two labels. We will further cover this part in the feature selection session. 
+
+```{r, fig.cap="Boxplots for Radiances of Angles", fig.height=5, fig.width=7}
+# Boxplot of radiance angles
+p <- all_image %>% filter(expert_label != 0) %>%
+  select(8:13) %>%
+  mutate(id = row_number()) %>%
+  gather(key = rad, value = angle, 1:5) %>%
+  ggplot(aes(rad, angle, fill = expert_alpha_label)) +
+  geom_boxplot(width=0.5) +
+  labs(title = "Side-by-Side Boxplot for Radiances of Angles") +
+  xlab("Angle Measure") +
+  ylab("Radiance") +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "bottom"
+        )
+
+p
+```
+
+Next, we will check the label differences based on features. The figure below is a side-by-side violin plot indicating the density curve of each label, distributed against the features. From this figure we see that labels are separated well in NDAI and SD. 
+
+* For CORR, although `clear` labels are concentrating well, it is difficult to differentiate the two labels against CORR value.
+* For SD, `clear` label is highly skewed and concentrated against the SD feature. 
+* For NDAI, the two labels concentrated on different values and are easy to separate based on NDAI.
+
+```{r, fig.cap="Violin Plots for Features", fig.height=4, fig.width=7}
+# Boxplot of radiance angles
+plot_1 <- all_image %>% filter(expert_label != 0) %>%
+  select(5, 13) %>%
+  ggplot(aes(expert_alpha_label, NDAI, fill = expert_alpha_label)) +
+  geom_violin(width=0.5) +
+  labs(title = "NDAI") +
+  xlab("Label") +
+  ylab("value") +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none"
+        )  + theme(plot.title = element_text(hjust = 0.5))
+
+plot_2 <- all_image %>% filter(expert_label != 0) %>%
+  select(6, 13) %>%
+  ggplot(aes(expert_alpha_label, SD, fill = expert_alpha_label)) +
+  geom_violin(width=0.5) +
+  labs(title = "SD", fill = 'label') +
+  xlab("Label") +
+  ylab("value") + 
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "bottom"
+        )  + theme(plot.title = element_text(hjust = 0.5))
+
+plot_3 <- all_image %>% filter(expert_label != 0) %>%
+  select(7, 13) %>%
+  ggplot(aes(expert_alpha_label, CORR, fill = expert_alpha_label)) +
+  geom_violin(width=0.5) +
+  labs(title = "CORR") +
+  xlab("Label") +
+  ylab("value") +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none"
+        )  + theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(plot_1, plot_2, plot_3, ncol = 3, widths=c(1,1,1.5))
+```
+We also create a pairwise scatter plot to check the 2d distributions of labels. All three measures are fairly good at separating out the points from one another. The NDAI measure does the best job of separating the cloudy and clear points from each other, with clusters forming around high NDAI scores with low radiance angles, and around low NDAI scores with high radiance angles.
+ 
+```{r, fig.cap="Pairwise scatter plot for features", fig.height=2.5, fig.width=9}
+# Scatter plots
+sample_image <- all_image %>%
+  sample_n(5000)
+
+df_ang_corr_plot <- sample_image %>%
+  filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = NDAI, 
+             y = CORR, 
+             colour = expert_alpha_label)) +
+  geom_point(alpha=0.2) +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "null"
+        )
+
+
+sd_corr_plot <- sample_image %>%
+  filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = CORR, 
+             y = SD, 
+             colour = expert_alpha_label)) +
+  geom_point(alpha=0.2) +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "null"
+        )
+
+ndai_corr_plot <- sample_image %>%
+  filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = CORR, 
+             y = NDAI, 
+             colour = expert_alpha_label)) +
+  geom_point(alpha=0.2) +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "right"
+        )
+
+grid.arrange(df_ang_corr_plot, sd_corr_plot, ndai_corr_plot, 
+             #cf_ang_corr_plot, bf_ang_corr_plot, af_ang_corr_plot,
+             ncol = 3, widths = c(1, 1, 1.5))
+```
+
+## Explore the Relationship between the Radiances of Different Angles
+
+Moving to exploring the relationship between the radiances of different angles, Figure 2 highlights that both labels are concentrated on different radiance values, with angle DF on the highest radiances and angle AN on the lowest radiances. This aligns with the information provided in the paper, since DF has the smallest angle and AN has the biggest (90 degree).
+
+We plot several pairwise scatterplots on radiances of different angles. We could see that `clear` label also concentrates, and there is some evidence for collinearity.
+
+```{r, fig.cap="Exploration: scatter plot for radiances of angles", fig.height=2.5, fig.width=9}
+# Scatter plots
+
+bf_ang_corr_plot <- sample_image %>%
+  filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = rad_ang_af, 
+             y = rad_ang_bf, 
+             colour = expert_alpha_label)) +
+  geom_point(alpha=0.2) +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "null"
+        )
+
+af_ang_corr_plot <- sample_image %>%
+  filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = rad_ang_cf, 
+             y = rad_ang_df, 
+             colour = expert_alpha_label)) +
+  geom_point(alpha=0.2) +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "right"
+        )
+
+cf_ang_corr_plot <- sample_image %>%
+  filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = rad_ang_an, 
+             y = rad_ang_cf, 
+             colour = expert_alpha_label)) +
+  geom_point(alpha=0.2) +
+  theme(plot.title = element_text(hjust = .5), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "null"
+        )
+
+grid.arrange(#df_ang_corr_plot, sd_corr_plot, ndai_corr_plot, 
+             bf_ang_corr_plot, cf_ang_corr_plot, af_ang_corr_plot,
+             ncol = 3, widths = c(1, 1, 1.5))
+```
+
+To gain more insight into collinearity, both visually and quantitatively, we construct a correlation matrix, and create a pairwise scatter plot.. The correlation matrix would help us identify highly correlated columns in our data and thus help in feature selection. Figure 5 is a both quantified and visualized correlation matrix. Using a cutoff correlation of .75, we find that the "af," "an," "bf," and "cf" measures are highly redundant with one another, while DF has quite high correlation with CF and BF but less correlation with AF and AN.
+
+# Modeling
+
+## Best Predictors
+
+To select the best features, we first create a "correlation matrix" that reports which features are highly correlated, and therefore probably redundant. This correlation matrix is also visualized in Figure 5. As mentinoned in the previous section, we used a cutoff correlation of .75, and found that the "af," "an," "bf," and "cf" measures are highly redundant with one another. So, we will only keep one feature among these four features for consideration before proceeding. Among these four, angle AN has the lowest correlation with the other features which we would like to keep, so we would keep angle AN, together with NDAI, Standard Deviation (SD), Correlation (CORR), and the Radiance Angle DF (rad_ang_df) measure for model building.
+
+```{r, fig.cap="Correlation matrix", fig.height = 6, fig.width = 9}
+GGally::ggpairs(all_image[sample(1:nrow(all_image),1500),5:12])
+```
+
+Next, we used caret implementations to determine what the most important features are for prediction. For feature selection, we employ the "Cross-Validation Learning Vector Quantization" method. This method runs a repeated cross validation, and returns scores for each feature that range between 0 (not important) and 1 (important).
+
+After running this analysis, we find that of the four features we identified, "Radiance Angle DF" was the least important, with "Radiance Angle AN" being the fourth most important feature. Unsurprisingly, NDAI was the most important feature. This plot suggests that the three best features are "NDAI," "SD," and "CORR". Figure 4 also lends support to the idea that cloudy and clear points can be split quite well when mapped onto NDAI, CORR, and SD measures.
+
+```{r, fig.cap="Feature selection", fig.height = 3, fig.width = 7}
+# Cross-Validation Learning Vector Quantization
+## Load LVQ model importance
+importance <- readRDS("R/cvlvq.rds")
+
+# Summarize Importance
+#print(importance)
+
+# Plot Importance
+plot(importance, main = "LVQ Variable Importance")
+
+```
+
+
+## Classifiers
+
+In this section, we develop several 0/1 classifiers to accurately classify expert labels. First, we remove unlabeled points in order to develop a classification rule that can distinguish between binarized cloudy/clear data points. We then try a series of models, each using different assumptions. The three classifiers we plan to pick are Logistic Regression, Support Vector Machine, and Quadratic Discrimnant Analysis (QDA). Here are are going to inspect the assumptions for each of them.
+
+```{r}
+binary_image <- all_image %>%
+  filter(expert_label != 0) %>%
+  mutate(expert_label = if_else(expert_label == -1, 0, 1))
+```
+
+### Assumptions for Logistic Regression
+
+Logistic regression has always been a typical 0-1 classifier. Assumptions of logistic regression are:
+
+* Error terms to be independent: we created covariance matrix to check for collinearity. Among the three features we picked - SD, CORR and NDAI, all the pairwise correlations didn't exceed 0.75, and we are confident to say this assumption is fulfilled.
+* The observations are linearly related to the log odds. To check this assumption, we could make a plot for the logit against each feature, which is illustrated in Figure 7. In Figure 7, we could see that it is not very much linear related.
+* Sample size cannot be too small, usually should be bigger than 30 cases. We already have 230,339 observations, which we believe should be sufficient to fulfill this assumption.
+
+```{r, fig.cap="Logit of output against features", fig.height = 4.6, fig.width = 7}
+logitloess <- function(x, y, xlab, s) {
+
+logit <- function(pr) {
+	log(pr/(1-pr))
+}
+
+if (missing(s)) {
+	locspan <- 0.7
+} else {
+	locspan <- s
+}
+
+loessfit <- predict(loess(y~x,span=locspan))
+pi <- pmax(pmin(loessfit,0.9999),0.0001)
+logitfitted <- logit(pi)
+
+plot(x, logitfitted, ylab="logit", xlab = xlab)
+
+}
+
+test_index <- sample(1:nrow(binary_image), 2000, replace = FALSE)
+
+par(mfrow=c(3,1)) 
+logitloess(binary_image$NDAI[test_index], binary_image$expert_label[test_index], 'NDAI')
+logitloess(binary_image$CORR[test_index], binary_image$expert_label[test_index], 'CORR')
+logitloess(binary_image$SD[test_index], binary_image$expert_label[test_index], 'SD')
+
+```
+
+### Assumptions for SVM
+
+While choosing SVM, we assume the two labeled groups can be linearly separated in an n dimensional space. In Figure 4 we illlustrated that NDAI, SD and CORR are actually good features on which the labeled groups can be separated. We also ran SVM using Gaussian kernel to raise the classifier into higher dimension spaces, which could separate these points better.
+
+### Assumptions for QDA
+
+In QDA, we assume that our predictors are drawn from multivariate Gaussian distribution. We have several ways to illustrate this. First, from Figure 3 in EDA part, we already created a violin plot to check density curve of each labeled group among these three features. The clear group does not have a normal distribution - it is skewed and sometimes has multiple peaks - but the cloud group looks better. To further check whether the distributions are Gaussian, we created QQ plots for each labeled group on each feature. In Figure 8 we see that the cloud group is following the normal line pretty well, while clear group is still skewed and not very normal. QDA also requires number of predictors n to be smaller than the number of observations, which in our case, we have only three predictors and more than 230k observations, so this requirement is fulfilled.
+
+```{r, fig.cap="qq plot for features", fig.height = 4, fig.width = 9}
+cloud_data <- binary_image %>% filter(expert_label == 1)
+clear_data <- binary_image %>% filter(expert_label == 0)
+cloud_index <- sample(1:nrow(cloud_data), 2000, replace = FALSE)
+clear_index <- sample(1:nrow(clear_data ), 2000, replace = FALSE)
+par(mfrow=c(2,3)) 
+
+y <- scale(cloud_data$NDAI[cloud_index], center = TRUE, scale = TRUE)
+qqnorm(y, main = "Normal Q-Q Plot for NDAI on Cloud group"); qqline(y, col = 2)
+
+y <- scale(cloud_data$CORR[cloud_index], center = TRUE, scale = TRUE)
+qqnorm(y, main = "Normal Q-Q Plot for CORR on Cloud group"); qqline(y, col = 2)
+
+y <- scale(cloud_data$SD[cloud_index], center = TRUE, scale = TRUE)
+qqnorm(y, main = "Normal Q-Q Plot for SD on Cloud group"); qqline(y, col = 2)
+
+y <- scale(clear_data$NDAI[clear_index], center = TRUE, scale = TRUE)
+qqnorm(y, main = "Normal Q-Q Plot for NDAI on Clear group"); qqline(y, col = 2)
+
+y <- scale(clear_data$CORR[clear_index], center = TRUE, scale = TRUE)
+qqnorm(y, main = "Normal Q-Q Plot for CORR on Clear group"); qqline(y, col = 2)
+
+y <- scale(clear_data$SD[clear_index], center = TRUE, scale = TRUE)
+qqnorm(y, main = "Normal Q-Q Plot for SD on Clear group"); qqline(y, col = 2)
+
+```
+
+## Model fit and cross validation
+
+To save time for knitting this report, we trained our modeled in a separate R script file `ml_models.R` which could be found in the `R` folder. The results of each trained model are saved into `.rds` files, and we would load into this report if needed. Before proceeding, we expect that the assumptions for SVM are the most realistic, and expect to get the best results from it.
+
+### Cross Validation
+
+After understanding the nature of our data, which is generated from image, we noticed that it would be best to group our observations based on their x and y locations. In this way, we make sure points that are close to each other stays in the same group, and we believe this grouping cross validation method would benefit our hyperparameter tuning process and proevent overfitting.
+
+Generally, we divde image into 20 by 20 small pieces, and when we tuned hyperparameter for SVM, this grouped cross validation method was used, In below, we created a table to show the result svm hyperparameter tuning:
+
+```{r}
+svm_model <- readRDS("R/svm_model.rds")
+logistic_results <- readRDS("R/logistic_results.rds")
+qda_model <- readRDS("R/qda_model.rds")
+
+df1 <- svm_model$results %>% filter(C == 0.5)
+svm_result <- df1[,3:8]
+
+qda_result <- qda_model$results[,-1]
+logistic_result <- logistic_results[,-1]
+
+kable(svm_model$results, caption = "Hyperparamter Tuning")
+```
+
+### Model fit
+
+To compare the model to one another, we chose to run Receiver Operating Characteristic (ROC) options in the training model. This is advantageous because it allows us to compare the ratio of accurate predictions to innaccurate ones, which is the central concern of this paper. Below we summarize each model along with useful measures
+
+```{r}
+model_performance <- rbind(logistic_result,qda_result,svm_result)
+rownames(model_performance) <- c('Logistic Regression','QDA','SVM')
+kable(model_performance, row.names = T, caption = "Model Selection Table")
+```
+
+Next we plot a confusion matrix and the ROC under the curve for the SVM predicted classes. High values in the cells corresponding to "True Positive" (top left) and "True Negative" (bottom right) are desirable in this case as they indicate overall model accuracy through frequency counts. Then we plot the ROC curve for the SVM model, and it has an area under the curve of about .85 (with close to 1 being descirable).
+
+```{r}
+test_data <- test_image %>%
+  filter(expert_label != 0)
+
+## SVM
+## Confusion Matrix
+svmClasses <- predict(svm_model,
+                      newdata = test_data[,4:6])
+
+conf <- confusionMatrix(svmClasses,
+                test_data$expert_alpha_label)
+kable(conf[[2]], caption = "Confusion Matrix")
+```
+
+```{r, fig.cap="ROC Curve for SVM", fig.height=3.5}
+## ROC Curve
+svm_probs <- predict(svm_model,
+                     test_data[,4:6],
+                     type = "prob")
+
+
+
+svm_ROC <- roc(test_data$expert_alpha_label,
+               svm_probs$cloud)
+plot(svm_ROC, main = "ROC Curve for SVM")
+result_coords <- coords(svm_ROC,
+                        "best",
+                        best.method = "closest.topleft",
+                        ret = c("threshold", "accuracy"))
+
+svm_AUC <- svm_ROC$auc
+```
+
+
+
+
+
+
+
+
+
+## Model Diagnostics
+
+Below we conduct some basic model diagnostics on our SVM model (Figure 10). The density of the residuals plot (bottom right) suggests a bimodal distribution of the residuals. This indicates non-normality in the data, which could be problematic for out-of-sample inference. 
+
+```{r, fig.height=3, fig.cap = "SVM Diagnostics Plot"}
+pred <- svm_model$pred %>% filter(C == 0.5) 
+pred_prob <- pred$cloud
+true_prob <- numeric(length(pred$obs))
+true_prob[pred$obs == 'cloud'] <- 1
+true_prob[pred$obs == 'clear'] <- 0
+res <- true_prob-pred_prob
+
+svm_sample <- readRDS("R/svm_sample.rds")
+
+sample_df <- cbind(svm_sample[pred$rowIndex,], res)
+
+
+res1 <- sample_df %>% ggplot(aes(x = NDAI, y = res )) + geom_point(alpha = 0.2, col = '#4a6da5')
+res2 <- sample_df %>% ggplot(aes(x = CORR, y = res )) + geom_point(alpha = 0.2, col = '#4a6da5')
+res3 <- sample_df %>% ggplot(aes(x = SD, y = res )) + geom_point(alpha = 0.2, col = '#4a6da5')
+density_plot <- sample_df %>% ggplot(aes(x = res )) + geom_density()
+grid.arrange(res1, res2, res3, density_plot,
+             ncol = 2)
+```
+
+## Misclassification Errors
+
+Overall, the SVM model performed the best in classifying points properly. The one exception comes in Image 1 (Figure 11) in the oval-shaped region that lies between 100 and 200 on the x-coordinate axis and about 0 and 100 on the y-coordinate axis, where it classifies most “clear” points as cloudy. Subsetting to the misclassified data and plotting density plots of the distributions of the NDAI scores, shaded by whether it was truly cloudy or clear or predicted to be so, reveals a significant disparity. 
+
+Most notably, the points misclassified by SVM have a unimodal shape centered around 1 (Figure 12). However, while looking at all data points, there was no peak, and in that area, cloudy and clear points shared similar proportions. We believe that the points around 1 were misclassified because neither the cloud nor clear classes dominated the population around that range, so the classifier is prone to make mistakes there.
+
+
+```{r, fig.width=7, fig.height=5, fig.cap="Image 1 \n True v. Predicted Cloud Cover"}
+mis_classify <- pred %>% filter(pred!=obs)
+misclassified_regions <- svm_sample[mis_classify$rowIndex,]
+
+plot_1 <- image_1 %>% filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 1") + 
+  xlab("") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "bottom"
+        ) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+plot_1_mis <- 
+  misclassified_regions %>%
+  filter(image_source ==1) %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 1") + 
+  xlab("") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "bottom"
+        ) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+
+
+plot_2 <- image_2 %>% filter(expert_alpha_label != "unknown") %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 2") + 
+  xlab("") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "bottom"
+        ) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+plot_2_mis <- 
+  misclassified_regions %>%
+  filter(image_source ==2) %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("   Cloud Cover \n    Image 2") + 
+  xlab("") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "bottom"
+        ) +
+  scale_y_reverse() + theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(plot_1, plot_1_mis, plot_2, plot_2_mis, ncol = 2)
+```
+
+```{r, fig.width=7, fig.height=4, fig.cap = "NDAI Distributions for True vs. Predicted"}
+# Histogram of the misclassified NDAI distribution for true values
+mistrue_NDAI_density <- ggplot(misclassified_regions) +  
+ stat_density(aes(x = NDAI, fill = expert_alpha_label)) +
+ ggtitle("NDAI Distribution for \n True Values \n (Mismatched Obs.)") +
+ xlab("") +
+ ylab("Density") +
+ theme(panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(), 
+       panel.background = element_blank(), 
+       legend.position = "null")
+
+# Histogram of misclassified NDAI for predicted values
+
+mispredict_NDAI_density <- ggplot(misclassified_regions) +
+  stat_density(aes(x = NDAI, fill = expert_alpha_label)) +
+  ggtitle("NDAI Distribution for \n Predicted Values \n (Mismatched Obs.)") +
+  xlab("") +
+  ylab("") +
+  theme(panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(), 
+       panel.background = element_blank(), 
+       legend.position = "null")
+
+
+# Histogram of the NDAI distribution for true values
+true_NDAI_density <- ggplot(data = test_data) +
+  stat_density(aes(x = NDAI, fill = expert_alpha_label)) +
+  ggtitle("NDAI Distribution for \n True Values \n (All Obs.)") +
+  xlab("NDAI") +
+  ylab("Density") +
+  theme(panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(), 
+       panel.background = element_blank(), 
+       legend.position = "none")
+
+# Histogram of the NDAI distribution for the predicted values
+predict_NDAI_density <- ggplot(data = test_data) +
+  stat_density(aes(x = NDAI, fill = svmClasses)) +
+  ggtitle("NDAI Distribution for \n Predicted Values \n (All Obs.)") +
+  xlab("NDAI") +
+  ylab("") +
+  theme(panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(), 
+       panel.background = element_blank(), 
+       legend.position = "none")
+
+grid.arrange(true_NDAI_density, predict_NDAI_density,
+             mistrue_NDAI_density, mispredict_NDAI_density,
+             ncol = 2)
+```
+
+## Performance on data without expert labels
+
+To test performance on an out-of-sample dataset, we purposely withheld image 3 from the training data so that we could test the algorithms on it. The SVM model had an accuracy rate about .8 in this new dataset (visualized in Figure 13). While this is a fairly encouraging rate, it may not be adequate for real-world use. The most likely culprit for the mistakes was that the algorithm predicted a fairly uniform distribution of NDAI scores (Figure 14), whereas in the actual dataset, it was unimodal around a score of 1.5. 
+
+```{r, fig.width=8, fig.height=4, fig.cap = "Image 3 True v. Predicted"}
+# SVM Predictions on Image 3
+image_3_predictions <- predict(svm_model,
+                               newdata = image_3)
+
+image_3_predictions <- as.data.frame(image_3_predictions)
+
+image_3 <- image_3 %>%
+  bind_cols(image_3_predictions)
+
+# Check accuracy
+
+image_3_classifiers <- image_3 %>%
+  filter(expert_alpha_label != "unknown") %>%
+  mutate(accurate = if_else(expert_alpha_label == image_3_predictions, 1, 0))
+
+accuracy_rate <- sum(image_3_classifiers$accurate)/nrow(image_3_classifiers)
+#print(accuracy_rate)
+
+# Plot the cloud coverage for the true values
+true_plot <- ggplot(data = image_3_classifiers, aes(x = x, y = y)) +
+  geom_point(aes(colour = expert_alpha_label)) +
+  ggtitle("True Cloud Cover for \n Image 1") + 
+  xlab("X-Coordinate") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        legend.position = "none") +
+  scale_y_reverse()
+
+# Plot the predicted cloud coverage
+predict_plot <- ggplot(data = image_3_classifiers, aes(x = x, y = y)) +
+  geom_point(aes(colour = image_3_predictions)) +
+  ggtitle("Predicted Cloud Cover for \n Image 1") + 
+  xlab("X-Coordinate") +
+  ylab("Y-Coordinate") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        legend.position = "right") +
+  scale_y_reverse()
+
+# Grid arrange the two plots side-by-side
+grid.arrange(true_plot, predict_plot, ncol = 2, widths = c(1, 1.5))
+```
+
+```{r, fig.width=8, fig.height=4, fig.cap = "Image 3 NDAI dist."}
+# Subset only to misclassified points
+misclassified_regions <- image_3_classifiers %>%
+  filter(expert_alpha_label != image_3_predictions)
+
+# Density of the NDAI distribution for true values
+true_NDAI_density <- ggplot(data = misclassified_regions) +
+  stat_density(aes(x = NDAI, fill = expert_alpha_label)) +
+  ggtitle("NDAI Distribution for \n True Values \n (Mismatched Obs.)") +
+  xlab("") +
+  ylab("Density") +
+  theme(panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(), 
+       panel.background = element_blank(), 
+       legend.position = "none")
+
+# Density of the NDAI distribution for the predicted values
+predict_NDAI_density <- ggplot(data = misclassified_regions) +
+  stat_density(aes(x = NDAI, fill = image_3_predictions)) +
+  ggtitle("NDAI Distribution for \n Predicted Values \n (Mismatched Obs.)") +
+  xlab("NDAI") +
+  ylab("Density") +
+  theme(panel.grid.major = element_blank(), 
+       panel.grid.minor = element_blank(), 
+       panel.background = element_blank(), 
+       legend.position = "bottom")
+
+grid.arrange(true_NDAI_density, predict_NDAI_density)
+```
+
+# Conclusion
+
+In this lab, we developed predictive models for identifying cloudy regions in satellite imagery. To do so, we first explored the relationship between camera angles and radiation, selected covariates, and built several candidate models. Overall, non-parametric methods performed quite well within sample (both in the training and test sets), and was able to predict points in a new dataset with about 80% accuracy. We checked the SVM model against other candidate models, and our initial hunch that it would have the best performance was confirmed.

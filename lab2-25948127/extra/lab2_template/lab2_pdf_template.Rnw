@@ -1,0 +1,59 @@
+\documentclass{article}
+
+\usepackage{geometry}
+\geometry{verbose,tmargin=1in,bmargin=1in,lmargin=1in,rmargin=1in}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\setlength{\parskip}{\smallskipamount}
+\setlength{\parindent}{0pt}
+\usepackage{amsthm}
+\usepackage{amsmath}
+
+
+\begin{document}
+
+\title{Lab 2 - Linguistic Survey\\
+Stat 215A, Fall 2017}
+
+
+\author{Your name}
+
+\maketitle
+
+You don't have to slavishly follow this template. Please use this
+structure for your report, but feel free to use your own \LaTeX{} format. Your report should be no more than 12 pages, including
+figures. Indicate your collaborators on the assignment, if you had
+any.
+
+
+\section{Introduction}
+
+
+\section{The Data}
+
+
+\subsection{Data quality and cleaning}
+
+This dataset isn't as bad as the redwood data, but there are still
+some issues. You should discuss them here and describe your strategies
+for dealing with them.
+
+
+\subsection{Exploratory Data Analysis}
+
+This is where you compare pairs of questions with discussion and plots.
+
+
+\section{Dimension reduction methods}
+
+This is where you discuss and show plots about the results of whatever
+dimension reduction techniques you tried - PCA, hierarchical clustering,
+K-means, random projections, etc.
+
+
+\section{Stability of findings to perturbation}
+
+
+\section{Conclusion}
+
+\end{document}

@@ -1,0 +1,817 @@
+---
+title: "Final Lab - fMRI"
+author: "Aniket Kesari"
+date: "November 18, 2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(caret)
+library(rgl)
+library(HDCI)
+library(corrplot)
+library(superheat)
+library(pROC)
+library(glmnet)
+library(doParallel)
+library(knitr)
+library(boot)
+library(gridExtra)
+library(scatterplot3d)
+library(ranger)
+library(caretEnsemble)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+## Set working directory and flatten images
+knitr::opts_knit$set(root.dir = "~/stat215a/lab_final")
+knitr::opts_chunk$set(dev = 'png', dpi = 300, echo=FALSE, message=FALSE, warning=FALSE, cache = TRUE, fig.pos = "H")
+```
+
+```{r}
+memory.limit(size = 50000)
+load("~/stat215a/lab_final/data/fMRIdata.RData")
+fit_stim <- read_csv("C:/Users/Anike/Desktop/fit_stim.csv")
+real_wav <- read_csv("C:/Users/Anike/Desktop/real_wav.csv")
+lasso_model_list <- readRDS("lasso_model_list.rds")
+rf_model_list <- readRDS("rf_model_list.rds")
+```
+
+# Introduction
+
+In this lab, the objective is to develop an algorithm that uses Functional Magnetic Resonance Imaging (fMRI) data to reconstruct still images. The data provided provides several thousand features, as well as multiple target outcomes. Each of the target outcomes represents the intensity of the response in a "voxel" (analagous to a 3D pixel) on the brain, and the features are the fMRI signals. This lab utilizes supervised learning approaches to develop accurate predictive regression models.
+
+# Data Cleaning/Processing
+
+The data came unlabeled, and in several pieces, which demanded a few preliminary cleaning steps. I take the following steps:
+
+1. Label all of the columns in the "feature" dataset with the prefix of "feature" followed by the column number.
+2. Add an ID column to the "voxel location" dataset.
+3. Label all of the columns in the "response" dataset with voxel numbers, corresponding to the IDs assigned in the previous step.
+4. Join the "feature" and "response" datasets into a master dataset.
+
+Below, a sample of the "master data set" that forms the backbone for model training and testing is shown.
+
+```{r}
+# Extract dataframes from list and save
+fit_feat <- as.data.frame(fit_feat)
+val_feat <- as.data.frame(val_feat)
+loc_dat <- as.data.frame(loc_dat)
+resp_dat <- as.data.frame(resp_dat)
+
+# Rename columns to take form "feature_#"
+fit_feat <- fit_feat %>%
+  rename_all(
+    funs(
+        # Change column names to lowercase
+        stringr::str_to_lower(.) %>%
+        # Replace all column names with "feature" followed by the number
+        stringr::str_replace_all("^v", 'feature.')
+      )
+  )
+
+val_feat <- val_feat %>%
+  rename_all(
+    funs(
+        # Same as fit_feat
+        stringr::str_to_lower(.) %>%
+        stringr::str_replace_all("^v", 'feature.')
+      )
+  )
+
+real_wav <- real_wav %>%
+  rename_all(
+    funs(
+      # Same as fit_feat
+      stringr::str_to_lower(.) %>%
+      stringr::str_replace_all("^v", "feature.")
+    )
+  )
+
+# Add voxel IDs
+
+loc_dat <- loc_dat %>%
+  # Add a voxel ID to the location data corresponding to row number
+  mutate(voxel_id = paste0('voxel.', row_number())) %>%
+  # Rename the columns to XYZ coordinates
+  rename(X = V1, Y = V2, Z = V3)
+
+resp_dat <- resp_dat %>%
+  rename_all(
+    funs(
+      # Replace resp_dat column names with voxel number
+      stringr::str_to_lower(.) %>%
+      stringr::str_replace_all("^v", "voxel.")
+    )
+  )
+
+# Create a Master Dataset
+
+master_data <- resp_dat %>%
+  # Bind fit_feat columns to resp_dat columns for the full dataset
+  bind_cols(fit_feat)
+```
+
+# Exploratory Data Analysis
+
+Below, I visualize the pairwise Pearson correlations between the voxel intensities. A few interesting patterns emerge:
+
+1. Voxels 1-9 share high correlations with one another
+2. Voxels 17-19 are similar to voxel 1-9
+3. Voxels 10, 11, 13, 16, and 20 share very little similarity to any other voxel. Voxels 16 and 20 seem especially uncorrelated.
+
+Because the voxels are a spatial concept, it is unsurprising that some of the responses might be highly correlated with one another, as multiple voxels may correspond to a particular region of the brain.
+
+```{r}
+# Voxel Correlation Matrix
+## Calculate pairwise correlations between the response data columns, return a matrix
+voxel_cor <- cor(resp_dat, method = "pearson")
+superheat(voxel_cor, 
+          bottom.label.text.angle = 90,
+          bottom.label.text.size = 3,
+          left.label.text.size = 3)
+```
+To investigate this further, I plotted a 3D scatterplot to visualize the location of the voxels relative to one another. The voxels are shaded by their "Z" coordinates to highlight which voxels are in the same plane as each other. Looking at this plot, the correlations between voxels 1-9 makes sense as they are spatially proximate. Meanwhile, voxel 20 is on its own plane, and voxel 16 is quite far from any other voxel, which explains why their values were especially uncorrelated.
+
+```{r}
+with(loc_dat, {
+  # Create a 3D scatterplot object
+  # Plot with XYZ coordinates from loc_dat
+  s3d <- scatterplot3d(X, Y, Z,
+  # Shade by "Z" position
+  color = Z, pch = 19,
+  # Draw vertical lines
+  type = "h",
+  # Title/labels
+  main = "3D Scatter of Voxel Locations",
+  xlab = "X",
+  ylab = "Y",
+  zlab = "Z")
+  # Convert coordinates
+    s3d.coords <- s3d$xyz.convert(X, Y, Z) # convert 3D coords to 2D projection
+    text(s3d.coords$x, s3d.coords$y,             # x and y coordinates
+         labels=row.names(loc_dat),               # text to plot
+         cex=.5, pos=4)           # shrink text 50% and place to right of points)
+})
+```
+
+# Partititon the Data
+
+Moving onto model fitting, I partition the master dataset into training, validation, and test sets. Each set uses 60%, 20%, and 20% of the data respectively. These numbers were chosen to strike a balance between providing the algorithm with enough data to learn on, while also saving enough data for model selection and testing purposes.
+
+The basic steps for model fitting are (according to Hastie in Elements of Statistical Learning):
+
+1. Train the models on the training data
+2. Predict on the validation set 
+3. Estimate the Prediction Error and Perform Model Selection
+4. Use the best model to predict on the test set to measure Generalization Error
+
+```{r}
+# Create partitions
+
+inTrain <- createDataPartition(y = master_data$voxel.1,
+                               p = .6,
+                               list = FALSE)
+
+## Training
+
+training <- master_data[inTrain,]
+
+## Validation and Test Sets
+temp <- master_data[-inTrain,]
+inTemp <- createDataPartition(y = temp$voxel.1,
+                              p = .5,
+                              list = FALSE)
+
+validation <- temp[inTemp, ]
+testing <- temp[-inTemp, ]
+```
+
+# Regression Methods
+
+There are a few difficulties with this particular prediction problem. The usual Ordinary Least Squares (OLS) takes the form:
+
+$Y = X\beta + \epsilon$
+
+Where $Y$ is a vector of responses, and $X$ is a matrix of predictors. However, the standard OLS regression can fall apart if certain assumptions are violated. In this case, the predictor data likely suffers from multicollinearity, which can create a range of problems including biased regression estimates, large standard errors, and poor predictive performance. Furthermore, this dataset has only 1750 observations, but over 10,000 features. In general, one should avoid specifying regression models with more features than observations because there is not a lot of information to make accurate predictions. Thus, the main task is to develop algorithms that avoids these problems, but can still achieve good predictive performance. 
+
+From a computational perspective, the problem is further complicated because of the high-dimensionality and multiple responses. Models can take a long time to train on high-dimensional datasets, particular when relying on iterative procedures. Furthermore, in this case, the task requires predicting 20 separate models (one for each voxel). All of this is compounded by the additional computation required for bootstrapping and/or cross-validation procedures. Parallel processing and cluster computing aid in this endeavor.
+
+## Random Forest
+
+The first method I employ is the random forest. A Random Forest is a non-parametric ensemble method that constructs multiple Classification and Regression Trees (CARTs), and then returns the mean prediction. The main advantage of the random forest over a CART is that it mitigates the tendency of CART to overfit its training data. Moreover, it is well suited to datasets with a large number of predictors because it randomly selects predictors as it grows trees and chooses optimal splits based on these random selections. In particular, I implement the "ranger" package. The primary advantage of "ranger" over other implementations is that its base is written in C, and therefore performs computations quickly.
+
+```{r, eval=FALSE}
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+fit_ranger <- function(training_data) {
+  ranger_positions <- c(i, 21:10941)
+  ranger_set <- training %>%
+    select(ranger_positions)
+  ranger(as.formula(paste0("voxel.", i, "~ .")), data = ranger_set)
+}
+
+rf.model.list <- list()
+rf.model.list <- foreach(i = 1:20, .packages = c("tidyverse", "ranger")) %dopar% {
+  fit_ranger(training)
+}
+
+stopCluster(cl)
+
+saveRDS(rf.model.list, "rf_model_list.rds")
+```
+
+## Ridge Regression
+
+The next method I employ is the "ridge regression." The ridge is a regularization method, which means that it penalizes models that overfit the training data. 
+
+```{r, eval=FALSE}
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+rctrl1 <- trainControl(method = "boot", 
+                       returnResamp = "all",
+                       number = 100, 
+                       allowParallel = TRUE,
+                       returnData = FALSE)
+
+fitModel <- function(data, method, control) {
+  positions <- c(i, 21:10941)
+  train_set <- data %>%
+    select(positions) 
+  zero_var_cols <- nearZeroVar(train_set)
+  train_set <- train_set %>%
+    select(-zero_var_cols)
+  m_fit <- train(data[ ,21:10941],
+                 data[ ,i],
+                 method = method,
+                 preProc = c("center", "scale"),
+                 trControl = control)
+}
+
+ridge.model.list <- list()
+ridge.model.list <- foreach(i = 1:20, 
+                            .packages = c("tidyverse", "caret", "lars")) #%dopar% {
+  fitModel(training, "ridge", rctrl1)
+}
+
+stopCluster(cl)
+```
+
+## Least Absolute Shrinkage and Selection Operator (LASSO)
+
+Next, I employ a Least Absolute Shrinkage and Selection Operator (LASSO) method. The LASSO is advantageous because it performs both variable selection and regularization. This means that it culls extaneous predictors (thus simplifying the model), and prevents overfitting the statistical noise, which aids in out-of-sample predictions.
+
+```{r, eval=FALSE}
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+fit_lasso <- function(training_data) {
+  cv.glmnet(as.matrix(training_data[ ,21:10941]), as.matrix(training_data[ ,i]))
+}
+
+lasso.model.list <- list()
+lasso.model.list <- foreach(i = 1:20, .packages = c("tidyverse", "glmnet")) %dopar% {
+  fit_lasso(training)
+}
+
+stopCluster(cl)
+
+saveRDS(lasso.model.list, "lasso_model_list.rds")
+
+```
+
+# Model Selection for LASSO
+
+To select the best model, I first employ a number of model selection techniques. These techniques basically evaluate model parameters. The central goals are are to select the simplest model possible that also generalizes well to a new dataset.
+
+## Cross-Validation
+
+The basic logic underlying cross-validation techniques is that the data should be split in some fashion, and the model should be trained on a large fraction of the data, then tested on another portion of the data that was left out of the training process. 
+
+In this case, I employed a k-fold cross-validation procedure. In this procedure, the data is split into k-folds, and one fold is left out as the test set, with the other k-1 folds used for training. This procedure is repeated until all folds have been used exactly once for testing, and then the estimate is derived from averaging the results from each of the k results. 
+
+The advantage to this procedure is that it directly measures prediction error, and corrects for overfitting to the training data by cycling through validation sets and taking their average. The main disadvantage to this approach is that it is computationally expensive (especially as one adds more k's), forcing a tradeoff between predictive accuracy and computation time. Moreover, k-fold cross validation will yield biased estimates relative to exhaustive cross validation procedures (detailed below).
+
+```{r}
+trainX <- training[ ,21:10941]
+trainX <- as.matrix(trainX)
+trainY <- training[ ,1]
+trainY <- as.matrix(trainY)
+
+fit <- glmnet(trainX, trainY, family = "gaussian")
+
+# Cross-Validation (CV)
+
+cvfit <- cv.glmnet(trainX, trainY, family = "gaussian")
+plot(cvfit)
+
+cvcoefs <- coef(cvfit, s = "lambda.1se")
+cvcoefs <- as.matrix(cvcoefs)
+cvcoefs <- as.data.frame(cvcoefs)
+colnams <- c("Lambda")
+colnames(cvcoefs) <- colnams
+cvcoefs_pos <- cvcoefs %>%
+  rownames_to_column() %>%
+  filter(Lambda > 0) %>%
+  top_n(20)
+```
+
+## ES-CV
+
+Estimation Stability Cross Validation (ES-CV) was first proposed by Lim and Yu (2013). The Estimation Stability (ES) portion is basically a test statistic that penalizes the estimated variance by the squared mean size of the estimated solution across a series of tuning parameters, $\tau$. Because a test statistic is not guaranteed to converge to a single local minimum, the ES component is combined with cross-validation to select the best metric. 
+
+```{r}
+# Estimation Stability Cross Validation (ESCV)
+escvfit <- escv.glmnet(trainX, trainY)
+
+
+```
+
+## Akaike Information Criterion
+
+The Akaike Information Criterion (AIC) was derived from information theory. In the context of model selection, it is basically a measure of information loss. The idea is that one should minimize the AIC between several candidate models.
+
+The formula is:
+
+$AIC = 2k - 2ln(\hat{L})$
+
+Where $k$ is the number of parameters, and $\hat{L}$ is the maximum likelihood of that model.
+
+The major benefit from an information criterion approach is that it is not nearly as computationally intensive as cross-validation methods. The major disadvantage is that AIC and AICc (discussed below) rely on the assumption that the model being assessed is univariate, linear in its terms, and has normally distributed residuals. If these assumptions fail, the formulau used to derive the information entropy will not be correct.
+
+```{r}
+# AIC
+tLL <- fit$nulldev - deviance(fit)
+k <- fit$df
+n <- fit$nobs
+AIC <- 2*k - tLL
+
+Df <- fit$df
+Dev <- fit$dev.ratio
+Lambda <- fit$lambda
+fit_df <- data.frame(Df, Dev, Lambda, AIC)
+```
+
+## AICc
+
+AICc is substantially the same as AIC. Instead, it solves the following formula:
+
+$AICc = AIC + \frac{2k(k+1)}{n - k - 1}$
+
+Basically, it adds a small sample correction the usual AIC equation. The main advantage of adding this penalty is that AIC may select too many parameters when $n$ is not many times larger than $k^2$, thus resulting in an overfit model. AICc approaches AIC as $n$ grows larger, which makes it most useful when dealing with small sample sizes and lots of features.
+
+```{r}
+# AICc
+AICc <- AIC + 2*k*(k+1)/(n-k-1)
+fit_df <- fit_df %>%
+  cbind(AICc)
+```
+
+## Bayes Information Criterion
+
+Formally, the Bayes Information Criterion (BIC) is defined as:
+
+$BIC = ln(n)k - 2n(\hat{L})$
+
+BIC is similar to AIC in that it is also rooted in information theory. THe main difference is that BIC will tend to penalize extra parameters, and assumes that the "true" model exists and will try to find it. AIC may be a better choice when the goal is simply predictive performance rather than fitting the true causal model.
+
+```{r}
+# BIC
+BIC<-log(n)*k - tLL
+fit_df <- fit_df %>%
+  cbind(BIC)
+```
+
+## Comparison
+
+
+
+# Performance on Validation Set
+
+Next, I evaluate the performance of the models on the validation set that was previously set aside. 
+
+```{r}
+# Predict on Validation Set Using LASSO Models
+memory.limit(size = 50000)
+
+newX <- as.matrix(validation[ ,21:10941])
+
+## Set Up Parallel
+
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+## Make Predictions
+preds <- foreach(i = 1:20, .packages = c("glmnet")) %dopar% {
+  predict(lasso_model_list[[i]], s = "lambda.1se", newx = newX)
+}
+
+stopCluster(cl)
+
+## Bind Predictions to Validation Set
+preds <- as.data.frame(preds)
+prefix <- "pred."
+suffix <- seq(1:20)
+pred.names <- paste(prefix, suffix, sep="")
+colnames(preds) <- pred.names
+
+validation <- validation %>%
+  bind_cols(preds)
+
+## Calculate Correlations
+### Is there a better way to automate this...?
+
+corr.1 <- cor(validation$voxel.1, validation$pred.1)
+corr.2 <- cor(validation$voxel.2, validation$pred.2)
+corr.3 <- cor(validation$voxel.3, validation$pred.3)
+corr.4 <- cor(validation$voxel.4, validation$pred.4)
+corr.5 <- cor(validation$voxel.5, validation$pred.5)
+corr.6 <- cor(validation$voxel.6, validation$pred.6)
+corr.7 <- cor(validation$voxel.7, validation$pred.7)
+corr.8 <- cor(validation$voxel.8, validation$pred.8)
+corr.9 <- cor(validation$voxel.9, validation$pred.9)
+corr.10 <- cor(validation$voxel.10, validation$pred.10)
+corr.11 <- cor(validation$voxel.11, validation$pred.11)
+corr.12 <- cor(validation$voxel.12, validation$pred.12)
+corr.13 <- cor(validation$voxel.13, validation$pred.13)
+corr.14 <- cor(validation$voxel.14, validation$pred.14)
+corr.15 <- cor(validation$voxel.15, validation$pred.15)
+corr.16 <- cor(validation$voxel.16, validation$pred.16)
+corr.17 <- cor(validation$voxel.17, validation$pred.17)
+corr.18 <- cor(validation$voxel.18, validation$pred.18)
+corr.19 <- cor(validation$voxel.19, validation$pred.19)
+corr.20 <- cor(validation$voxel.20, validation$pred.20)
+
+corrs <- cbind(corr.1, corr.2, corr.3, corr.4, corr.5, corr.6, corr.7, corr.8, corr.9, corr.10, corr.11, corr.12, corr.13, corr.14, corr.15,
+               corr.16, corr.17, corr.18, corr.19, corr.20)
+corrs <- as.data.frame(corrs)
+
+loc_corr <- loc_dat %>%
+  bind_cols(gather(corrs)) %>%
+  select(-key) %>%
+  rename(corr = value) %>%
+  mutate(colors = if_else(corr <= .2998, "red", if_else(corr <= .3904, "blue", if_else(corr <= .4772, "yellow", "green")))) %>%
+  mutate(quartile = if_else(corr <= .2998, "1st Quartile", if_else(corr <= .3904, "2nd Quartile", if_else(corr <= .4772, "3rd Quartile", "4th Quartile"))))
+
+with(loc_corr, {
+  s3d <- scatterplot3d(X, Y, Z,
+  color = colors, pch = 16,
+  type = "h",
+  main = "3D Scatter of Voxel Locations",
+  xlab = "X",
+  ylab = "Y",
+  zlab = "Z")
+    legend(s3d$xyz.convert(34.07, 23, 9), legend = levels(factor(loc_corr$quartile)), col = c("red", "blue", "yellow", "green"), pch = 16)
+    s3d.coords <- s3d$xyz.convert(X, Y, Z) # convert 3D coords to 2D projection
+    text(s3d.coords$x, s3d.coords$y,             # x and y coordinates
+         labels=row.names(loc_dat),               # text to plot
+         cex=.5, pos=4)           # shrink text 50% and place to right of points)
+})
+```
+
+```{r}
+# Prediction with Random Forest
+# Predict on Validation Set Using LASSO Models
+memory.limit(size = 50000)
+
+test_pred <- predict(rf_model_list[[1]], data = validation)
+
+## Set Up Parallel
+
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+## Make Predictions
+ranger.preds <- foreach(i = 1:20, .packages = c("ranger")) %dopar% {
+  predict(rf_model_list[[i]], data = validation)
+}
+
+stopCluster(cl)
+
+## Bind Predictions to Validation Set
+preds <- list()
+for (i in 1:20) {
+  preds[[i]] <- ranger.preds[[i]]$predictions
+}
+preds <- as.data.frame(preds)
+prefix <- "pred."
+suffix <- seq(1:20)
+pred.names <- paste(prefix, suffix, sep="")
+colnames(preds) <- pred.names
+
+validation <- validation %>%
+  bind_cols(preds)
+
+## Calculate Correlations
+### Is there a better way to automate this...?
+
+corr.1 <- cor(validation$voxel.1, validation$pred.1)
+corr.2 <- cor(validation$voxel.2, validation$pred.2)
+corr.3 <- cor(validation$voxel.3, validation$pred.3)
+corr.4 <- cor(validation$voxel.4, validation$pred.4)
+corr.5 <- cor(validation$voxel.5, validation$pred.5)
+corr.6 <- cor(validation$voxel.6, validation$pred.6)
+corr.7 <- cor(validation$voxel.7, validation$pred.7)
+corr.8 <- cor(validation$voxel.8, validation$pred.8)
+corr.9 <- cor(validation$voxel.9, validation$pred.9)
+corr.10 <- cor(validation$voxel.10, validation$pred.10)
+corr.11 <- cor(validation$voxel.11, validation$pred.11)
+corr.12 <- cor(validation$voxel.12, validation$pred.12)
+corr.13 <- cor(validation$voxel.13, validation$pred.13)
+corr.14 <- cor(validation$voxel.14, validation$pred.14)
+corr.15 <- cor(validation$voxel.15, validation$pred.15)
+corr.16 <- cor(validation$voxel.16, validation$pred.16)
+corr.17 <- cor(validation$voxel.17, validation$pred.17)
+corr.18 <- cor(validation$voxel.18, validation$pred.18)
+corr.19 <- cor(validation$voxel.19, validation$pred.19)
+corr.20 <- cor(validation$voxel.20, validation$pred.20)
+
+corrs <- cbind(corr.1, corr.2, corr.3, corr.4, corr.5, corr.6, corr.7, corr.8, corr.9, corr.10, corr.11, corr.12, corr.13, corr.14, corr.15,
+               corr.16, corr.17, corr.18, corr.19, corr.20)
+corrs <- as.data.frame(corrs)
+
+loc_corr <- loc_dat %>%
+  bind_cols(gather(corrs)) %>%
+  select(-key) %>%
+  rename(corr = value) %>%
+  mutate(colors = if_else(corr <= .2998, "red", if_else(corr <= .3904, "blue", if_else(corr <= .4772, "yellow", "green")))) %>%
+  mutate(quartile = if_else(corr <= .2998, "1st Quartile", if_else(corr <= .3904, "2nd Quartile", if_else(corr <= .4772, "3rd Quartile", "4th Quartile"))))
+
+with(loc_corr, {
+  s3d <- scatterplot3d(X, Y, Z,
+  color = colors, pch = 16,
+  type = "h",
+  main = "3D Scatter of Voxel Locations",
+  xlab = "X",
+  ylab = "Y",
+  zlab = "Z")
+    legend(s3d$xyz.convert(34.07, 23, 9), legend = levels(factor(loc_corr$quartile)), col = c("red", "blue", "yellow", "green"), pch = 16)
+    s3d.coords <- s3d$xyz.convert(X, Y, Z) # convert 3D coords to 2D projection
+    text(s3d.coords$x, s3d.coords$y,             # x and y coordinates
+         labels=row.names(loc_dat),               # text to plot
+         cex=.5, pos=4)           # shrink text 50% and place to right of points)
+})
+
+```
+# Diagnostics
+
+Next, I explore some standard regression diagnostics for the LASSO model. Regression diagnostics are typically used to assess the overall fit of a model, detect outliers, and check if the modeling assumptions are reasonable. This process is important because poor model fit indicates that there may be a better model choice, and influential points can sometimes severely bias an estimate, thus compromising out-of-sample predictions.
+
+## Residuals v. Fitted Plot
+
+```{r}
+model.1 <- lasso_model_list[[1]]
+model.15 <- lasso_model_list[[15]]
+model.16 <- lasso_model_list[[16]]
+
+validation$resids.1 <- validation$pred.1 - validation$voxel.1 
+validation$resids.15 <- validation$pred.15 - validation$voxel.15
+
+rvf1 <- ggplot(data = validation, aes(x = pred.1, y = resids.1)) + 
+  geom_point() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none") +
+  ggtitle("Residuals v. Fitted Plot for Model 1") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  geom_hline(yintercept = 0, color = "red")
+
+rvf15 <- ggplot(data = validation, aes(x = pred.15, y = resids.15)) + 
+  geom_point() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none") +
+  ggtitle("Residuals v. Fitted Plot for Model 15") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  geom_hline(yintercept = 0, color = "red")
+
+grid.arrange(rvf1, rvf15, ncol = 2)
+```
+
+## Normal Q-Q Plot
+
+```{r}
+ggplot(data = validation, aes(x = 1, voxel.1,  group = 1)) + 
+  geom_boxplot() +
+  geom_jitter()
+```
+
+```{r, eval = FALSE}
+validation$std.resids.1 <- validation$resids.1/sd(validation$resids.1)
+validation$std.resids.15 <- validation$resids.15/sd(validation$resids.15)
+
+ggplot(data = validation, aes(qqnorm(std.resids.1)[[1]], std.resids.1)) +
+  geom_point() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none") +
+  geom_abline(aes(qqline(std.resids.1))) +
+  ggtitle("Normal Q-Q for Model 1") + 
+  xlab("Theoretical Quantiles") +
+  ylab("Standardized Residuals")
+
+ggplot(data = validation, aes(qqnorm(std.resids.1)[[15]], std.resids.15)) +
+  geom_point() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none") +
+  geom_abline(aes(qqline(std.resids.15))) +
+  ggtitle("Normal Q-Q for Model 1") + 
+  xlab("Theoretical Quantiles") +
+  ylab("Standardized Residuals")
+```
+
+```{r, eval = FALSE}
+C:/Users/Anike/Desktop
+/accounts/campus/akesari/stat215a/lab_final/lasso_model_list.rds
+
+scp akesari@gandalf.berkeley.edu:/accounts/campus/akesari/stat215a/lab_final/ridge_model.list.rda C:/Users/Anike/Desktop/
+```
+
+# Model Interpretation
+
+## Importance
+
+An important task at this stage is to identify the important features that are useful for predictions, and make decisions about how to potentially refit the model. To assess variable importance, I use the same implementation that the "caret" package employs. This function returns a number between 0 (not important) and 1 (very important) that indicates how important each feature was in making the prediction. I identified the most important variables, and remove any features that did not meet the threshold of .2 importance for any of the voxels. Below is a plot illustrating the importance of features for predicting voxel 1, to illustrate the general concept. 
+
+```{r}
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+varImp <- function(object, lambda = NULL, ...) {
+  beta <- predict(object, s = lambda, type = "coef")
+  if(is.list(beta)) {
+    out <- do.call("cbind", lapply(beta, function(x) x[,1]))
+    out <- as.data.frame(out)
+  } else out <- data.frame(Overall = beta[,1])
+  out <- abs(out[rownames(out) != "(Intercept)",,drop = FALSE])
+  out
+}
+
+## Make Predictions
+imp <- foreach(i = 1:20, .packages = c("glmnet")) %dopar% {
+  varImp(lasso_model_list[[i]], lambda = lasso_model_list[[i]]$lambda.1se)
+}
+
+stopCluster(cl)
+
+#imp.list <- list()
+
+#for (i in 1:20) {
+#  imp.list[[i]] <- imp[[i]]$importance
+#}
+
+#for (i in 1:20) {
+#  imp.list[[i]] <- imp.list[[i]]   %>%tibble::rownames_to_column() %>%
+#    mutate(group = paste0("model.", i))
+#}
+
+#all.imp <- bind_rows(imp.list)
+
+imp <- as.data.frame(imp)
+prefix <- "model."
+suffix <- seq(1:20)
+imp.names <- paste(prefix, suffix, sep="")
+colnames(imp) <- imp.names
+
+#top.imp <- imp %>%
+#  rename(Feature = rowname, Importance = Overall) %>%
+#  group_by(group) %>%
+#  top_n(20, Importance) %>%
+#  spread(group, Importance)
+  
+#imp.dat[is.na(imp.dat)] <- 0
+#row.names(imp.dat) <- imp.dat$Feature
+#imp.dat <- imp.dat %>% 
+#  select(-Feature) %>%
+#  mutate(avg_intensity = rowMeans(.[ ,1:20]))
+
+pos.imp <- imp %>%
+  rownames_to_column() %>%
+  mutate(sumVar = rowSums(.[ ,2:21])) %>%
+  filter(sumVar > 0) 
+
+top_hist <- pos.imp %>%
+  select(rowname, model.1) %>%
+  top_n(20) %>%
+  ggplot() + geom_point(aes(x = rowname, y = model.1)) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Variable Importance") +
+  xlab("Feature") +
+  ylab("Importance")
+```
+
+Overall, fewer than 300 features ended up being important for any of the models whatseover. This is obviously considerably fewer than the nearly 11,000 in the original data, so the variable importance examination simplifies the model. This is also advantageous because it reduces the effects of multicollinearity in the data by removing potentially redundant features.
+
+## Stability
+
+
+
+```{r, eval=FALSE}
+resamp_frame <- lasso_model_list[[1]]$resample %>%
+  mutate(row = row_number()) %>%
+  filter(fraction == .9)
+
+ggplot(data = resamp_frame, aes(x = row, y = RMSE)) + 
+  geom_point() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        legend.position = "none") +
+  ggtitle("Root Mean Square Error v. Bootstrap Iteration") +
+  xlab("Bootstrap") +
+  ylab("RMSE")
+```
+
+## Hypothesis Testing
+
+In terms of hypothesis testing, I use the test proposed by Lockhart et. al. in "A significance test for the lasso." The authors propose a test statistic for the lasso that relies on a *covariance test statistic.* The basic intuition underlying the test is that the significance of a predictor variable is calculated as it enters the active set based on the covariance between the predictor and the target. The statistic overcomes the usual limitations of the chi-square and F-tests because it inherently accounts for the adaptive nature of lasso, whereas the conventional tests are based on linear regression.
+
+```{r, eval=FALSE}
+covTest(lasso_model_list[[1]], newX, validation$voxel.1)
+```
+
+## What can Be Learned?
+
+The big lessons from this process are that many of the features are not useful for predicting voxel responses, and spatially distinct voxels probably correspond to similar biological regions of the brain. These findings suggest that the bulk of fMRI signals are not that useful for predicting most voxel responses. This means that the signals either serve some other purpose, or the features are highly associated with particular regions of the brain, and are therefore not too useful for predicting the responses of other parts of the brain.
+
+To build further evidence for this, I show a frequency table of how many features are shared by voxels 1-4:
+
+```{r}
+pos.imp %>%
+  select(rowname, model.1, model.2, model.3, model.4) 
+```
+
+# Out-of-Sample Prediction
+
+Using the information gleaned in the model fitting and selection process, I proceed to construct a final model that will be used for out-of-sample prediction. Although a model will generally fit its training data quite well, it will not necessarily predict the test set or and out-of-sample set well if it is too attuned to irregularities in the training data that are not present in the other sets. Therefore, I used the validation set to correct for this type of prediction error, and retrain a model that will likely generalize better to new data.
+
+I take important steps in this regard. First, using the fact that several of the voxels are correlated, I average the voxel responses in the same layer as voxel 1. The V1 region of the brain (the visual cortex) is itself divided into 6 layers, so averaging the responses across voxels in the same layer gives a more accurate sense of how that layer of the brain is responding. Second, I construct an ensemble algorithm, combining both the lasso and random forest implementations, and selecting out the unimportant features. Ensemble methods tend to be more accurate than their constituent algorithms, and removing unimportant features (as defined by scoring less than .2 on the variable importance measure) should improve performance. 
+
+```{r}
+imp.1 <- pos.imp %>% filter(model.1 > .2)
+imp.features <- imp.1$rowname 
+
+train.2 <- training %>% 
+  select(voxel.1, imp.features) %>%
+  filter(voxel.1 >= -1.5 & voxel.1 <= 1.5)
+
+train.2 <- training %>%
+  select(voxel.1, 21:10941)
+
+zero_var_cols <- nearZeroVar(train.2)
+train.2 <- train.2 %>%
+    select(-zero_var_cols)
+
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+rctrl1 <- trainControl(method = "boot", 
+                       savePredictions = "final",
+                       number = 2, 
+                       allowParallel = TRUE,
+                       index = createResample(train.2$voxel.1, 2),
+                       returnData = FALSE)
+
+model_list <- caretList(
+  voxel.1 ~ .,
+  data = train.2,
+  trControl = rctrl1,
+  methodList = c("lasso", "ridge", "ranger")
+)
+
+ensemble_model <- caretEnsemble(
+  model_list,
+  trControl = trainControl(
+    number = 2)
+)
+
+stopCluster(cl)
+
+ens_pred <- predict(ensemble_model, newdata = validation)
+ens_pred <- as.matrix(ens_pred)
+```
+
+# Conclusion

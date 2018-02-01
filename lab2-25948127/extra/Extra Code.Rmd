@@ -1,0 +1,301 @@
+---
+title: "Extra Code"
+author: "Aniket Kesari"
+date: "September 25, 2017"
+output: html_document
+---
+
+```{r}
+coordinates(Q95KeyData) <- ~ longitude + latitude
+proj4string(Q95KeyData) <- CRS("+proj=longlat +datum=WGS84")
+
+counties <- map('county', fill=TRUE, col="transparent", plot=FALSE)
+IDs <- sapply(strsplit(counties$names, ":"), function(x) x[1])
+counties_sp <- map2SpatialPolygons(counties, IDs=IDs,
+proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+indices <- over(Q95KeyData, counties_sp)
+
+countyNames <- sapply(counties_sp@polygons, function(x) x@ID)
+Q95KeyData$county<-countyNames[indices]
+
+mapcounties$county <- with(mapcounties , paste(region, subregion, sep = ","))
+
+Q95CountyData <- as.data.frame(Q95KeyData) %>%
+                  group_by(county) %>%
+                  mutate(countycount = sum(n)) %>%
+                  distinct(county, common_ans, countycount) %>%
+                  left_join(mapcounties) 
+
+ggplot() + geom_polygon(data = mapcounties, aes(long, lat, group=group)) + geom_polygon(data = Q95CountyData, aes(long, lat, fill=common_ans, group=group)) 
+              
+
+
+
+
+ggplot() +
+geom_polygon(data = mapcounty, aes(long, lat,  fill=subregion, group=group)) + theme(legend.position = "none")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Load Data
+## Load Data for Answers to Question 95, "What is The City?"
+Q95City <- as.data.frame(all.ans$'95')
+## Load Data for Question 104, "What do you refer to underground public rail transit as?"
+Q104Subway <- as.data.frame(all.ans$'104')
+
+## Q95 
+Q95City$ans.num <- c(1:6) # Index letter answers with numbers
+Q104Subway$ans.num <- c(1:6)
+
+### Merge survey data with the corresponding answers
+Q95Data <- lingData %>%
+            select(ID, CITY, STATE, ZIP, Q095, lat, long) %>%
+            rename(ans.num = Q095) %>% 
+            full_join(Q95City)
+
+### Load in zipcode data for matching
+data(zipcode)
+zipcode$zip <- as.numeric(zipcode$zip)
+
+### Write a function to find the mode of a vector (to find the most frequent answer by zip code)
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+### Take answer data, merge it with long/lat info from zipcodes, find the most common answer by zip code, drop NA's 
+Q95AggData <- Q95Data %>%
+                rename(zip = ZIP) %>%
+                full_join(zipcode) %>%
+                group_by(zip) %>%
+                mutate(common_ans = Mode(ans)) %>%
+                drop_na(common_ans) 
+
+### Count The Number of Observations by Zip Code
+zipq95 <- Q95AggData %>%
+                count(zip)
+
+### Gather into key-value pair
+Q95KeyData <- zipq95 %>%
+                left_join(Q95AggData) %>%
+                select(zip, latitude, longitude, common_ans, n) %>%
+                distinct() %>%
+                filter(!is.na(longitude), !is.na(latitude))
+
+### Load in county and state data
+mapcounties <- map_data("county")
+mapstates <- map_data("state")
+
+### Get Spatial Information From County Data
+counties <- map('county', fill=TRUE, col="transparent", plot=FALSE)
+IDs <- sapply(strsplit(counties$names, ":"), function(x) x[1])
+counties_sp <- map2SpatialPolygons(counties, IDs=IDs,
+proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+### Get spatial Information from Key-Value data
+Q95KeyData_sp <- Q95KeyData
+coordinates(Q95KeyData_sp) <- ~longitude + latitude
+proj4string(Q95KeyData_sp) <- CRS("+proj=longlat +datum=WGS84")
+indices <- over(Q95KeyData_sp, counties_sp)
+
+### Index the Key-Value data with county names and geographic info
+countyNames <- sapply(counties_sp@polygons, function(x) x@ID)
+Q95KeyData$county <- countyNames[indices]
+
+mapcounties$county <- with(mapcounties , paste(region, subregion, sep = ","))
+
+#library(plyr)
+#Q95KeyData_sum <- ddply(Q95KeyData, c("county"), summarize, counts = sum(n))
+#Q95KeyData_un <- Q95KeyData[!duplicated(Q95KeyData[c("county")]),]
+#Q95KeyData_final <- merge(Q95KeyData_sum, Q95KeyData_un, by="county")
+
+### Count observations by county, remove duplicates, and join with county data
+Q95KeyData_sum <- Q95KeyData %>% mutate(counts = sum(n))
+Q95KeyData_un <- Q95KeyData %>% distinct()
+Q95KeyData_final <- full_join(Q95KeyData_sum, Q95KeyData_un)
+mergedQ95 <- full_join(mapcounties, Q95KeyData_final)
+  
+# mergedQ95 <- merge(mapcounties, Q95KeyData_final)
+
+### Plot
+ggplot(data=mergedQ95, aes(long, lat, group=group)) + geom_polygon(aes(fill=common_ans)) + geom_path(data=mapstates, colour="black", size=.3) + geom_path(data=mapcounties, colour="white", size=.5, alpha=.1) + ggtitle("Cholopleth of Answer to 'What is the City?'") + xlab("Longitude") + ylab("Latitude") + theme_bw() + guides(fill=guide_legend(title="City"))
+
+# Q104
+
+Q104Data <- lingData %>%
+            select(ID, CITY, STATE, ZIP, Q104, lat, long) %>%
+            rename(ans.num = Q104) %>% 
+            full_join(Q104Subway)
+
+### Load in zipcode data for matching
+data(zipcode)
+zipcode$zip <- as.numeric(zipcode$zip)
+
+### Write a function to find the mode of a vector (to find the most frequent answer by zip code)
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+### Take answer data, merge it with long/lat info from zipcodes, find the most common answer by zip code, drop NA's 
+Q104AggData <- Q104Data %>%
+                rename(zip = ZIP) %>%
+                full_join(zipcode) %>%
+                group_by(zip) %>%
+                mutate(common_ans = Mode(ans)) %>%
+                drop_na(common_ans) 
+
+### Count The Number of Observations by Zip Code
+zipq104 <- Q104AggData %>%
+                count(zip)
+
+### Gather into key-value pair
+Q104KeyData <- zipq104 %>%
+                left_join(Q104AggData) %>%
+                select(zip, latitude, longitude, common_ans, n) %>%
+                distinct() %>%
+                filter(!is.na(longitude), !is.na(latitude))
+
+### Load in county and state data
+mapcounties <- map_data("county")
+mapstates <- map_data("state")
+
+### Get Spatial Information From County Data
+counties <- map('county', fill=TRUE, col="transparent", plot=FALSE)
+IDs <- sapply(strsplit(counties$names, ":"), function(x) x[1])
+counties_sp <- map2SpatialPolygons(counties, IDs=IDs,
+proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+### Get spatial Information from Key-Value data
+Q104KeyData_sp <- Q104KeyData
+coordinates(Q104KeyData_sp) <- ~longitude + latitude
+proj4string(Q104KeyData_sp) <- CRS("+proj=longlat +datum=WGS84")
+indices <- over(Q104KeyData_sp, counties_sp)
+
+### Index the Key-Value data with county names and geographic info
+countyNames <- sapply(counties_sp@polygons, function(x) x@ID)
+Q104KeyData$county <- countyNames[indices]
+
+mapcounties$county <- with(mapcounties , paste(region, subregion, sep = ","))
+
+#library(plyr)
+#Q95KeyData_sum <- ddply(Q95KeyData, c("county"), summarize, counts = sum(n))
+#Q95KeyData_un <- Q95KeyData[!duplicated(Q95KeyData[c("county")]),]
+#Q95KeyData_final <- merge(Q95KeyData_sum, Q95KeyData_un, by="county")
+
+### Count observations by county, remove duplicates, and join with county data
+Q104KeyData_sum <- Q104KeyData %>% mutate(counts = sum(n))
+Q104KeyData_un <- Q104KeyData %>% distinct()
+Q104KeyData_final <- full_join(Q104KeyData_sum, Q104KeyData_un)
+mergedQ104 <- full_join(mapcounties, Q104KeyData_final)
+  
+# mergedQ95 <- merge(mapcounties, Q95KeyData_final)
+
+### Plot
+ggplot(data=mergedQ104, aes(long, lat, group=group)) + geom_polygon(aes(fill=common_ans)) + geom_path(data=mapstates, colour="black", size=.3) + geom_path(data=mapcounties, colour="white", size=.5, alpha=.1) + ggtitle("Cholopleth of Answer to 'What is your name for an underground rail?'") + xlab("Longitude") + ylab("Latitude") + theme_bw() + guides(fill=guide_legend(title="City"))
+```
+
+## Binary string conversion for one row
+
+```{r}
+## Binary string for one row
+
+raw_lingData <- lingData %>%
+                  select(starts_with("Q"))
+
+raw_lingDatarow <- raw_lingData %>%
+                    slice(1:1) %>%
+                    gather() %>%
+                    rename(qnum = key) 
+
+test <- master_answer_bank %>%
+  group_by(qnum) %>%
+  left_join(raw_lingDatarow) %>%
+  mutate(binary = ifelse(ans.num == value, 1, 0))
+
+test2 <- raw_lingData %>%
+            slice(1:1) %>%
+            gather() %>%
+            rename(qnum = key) %>%
+            left_join(master_answer_bank) %>%
+            mutate(binary = ifelse(ans.num == value, 1, 0))
+```
+
+## Try to convert lingLocation into spatial data
+
+```{r}
+lingLocationtest <- lingLocation %>%
+                      filter(Latitude > 25 & Latitude < 50 & Longitude < -65 & Longitude > -125)
+lingCoords <- matrix(c(lingLocationtest$Longitude, lingLocationtest$Latitude), ncol=2)
+P1 <- Polygon(lingCoords)
+Ps1 <- SpatialPolygons(list(Polygons(list(P1), ID = "bin")), proj4string = CRS("+proj=longlat +datum=WGS84"))
+plot(Ps1, axes = TRUE)
+```
+
+## MCA without labels
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+ggplot(data=binary.mca.obs, aes(x = Dim.1, y = Dim.2)) +
+  geom_hline(yintercept=0, colour="gray70") +
+  geom_vline(xintercept=0, colour="gray70") +
+  geom_point(colour="gray50", alpha=.7) +
+  geom_density2d(colour="gray80") +
+  geom_point(data=binary.mca.vars, aes(x = Dim.1, y = Dim.2, colour=Variable)) + scale_colour_discrete(name="Variable") + theme(legend.position = "none")
+```
+
+
+## PCA and MCA on non-binarized data
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+## PCA
+lingDatasub <- lingData %>% select(-ID, -CITY, -STATE, -ZIP, -lat, -long, -Region)
+lingDatasub <- lapply(lingDatasub, as.numeric)
+lingDatasub <- as.data.frame(lingDatasub)
+lingDatasub <- lapply(lingDatasub, as.numeric)
+full.pca <- prcomp(~ ., lingDatasub, scale=T)
+STATE <- as.factor(lingData$STATE)
+plotLabeledData(full.pca$x[,1], full.pca$x[,2], label=Region) + ggtitle("Groupings") + xlab("PC1") + ylab("PC2")
+
+## MCA
+
+lingDatasub <- lapply(lingDatasub, as.factor)
+lingDatasub <- as.data.frame(lingDatasub)
+full.mca <- MCA(lingDatasub, graph=FALSE)
+
+cats <- apply(lingDatasub, 2, function(x) nlevels(as.factor(x)))
+full.mca.vars <- data.frame(full.mca$var$coord, Variable = rep(names(cats), cats))
+full.mca.obs <- data.frame(full.mca$ind$coord)
+
+ggplot(data=full.mca.vars, aes(x=Dim.1, y=Dim.2, label=rownames(full.mca.vars))) +
+  geom_hline(yintercept = 0, colour = "gray70") +
+  geom_vline(xintercept = 0, colour = "gray70") +
+  geom_text(aes(colour=Variable)) +
+  ggtitle("MCA Plot") + theme(legend.position = "none")
+
+ggplot(data=binary.mca.obs, aes(x = Dim.1, y = Dim.2)) +
+  geom_hline(yintercept=0, colour="gray70") +
+  geom_vline(xintercept=0, colour="gray70") +
+  geom_point(colour="gray50", alpha=.7) +
+  geom_density2d(colour="gray80") +
+  geom_point(data=binary.mca.vars, aes(x = Dim.1, y = Dim.2, colour=Variable)) + scale_colour_discrete(name="Variable") + theme(legend.position = "none")
+```
+
+# lingLocation
+
+```{r}
+## Assign bin numbers
+lingLocation <- lingLocation %>%
+                mutate(bin = seq(1:nrow(lingLocation))) 
+
+lingLocation <- lingLocation %>%
+                  mutate(latmin = (Latitude - .5)) %>%
+                  mutate(latmax = (Latitude + .5)) %>%
+                  mutate(longmin = (Longitude - .5)) %>%
+                  mutate(longmax = (Longitude + .5))
+
+## Rename lingLocation column names to match Binary Data
+binnames <- colnames(BinaryData)
+binnames <- binnames [2:469]
+colnames(lingLocation) <- c("Number.of.people.in.cell", "Latitude", "Longitude", binnames, "bin")
+```

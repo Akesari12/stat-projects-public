@@ -1,0 +1,142 @@
+---
+title: "Homework 4"
+author: |
+  | Aniket Kesari
+  | UC Berkeley Law
+  | 25948127
+date: "November 16, 2017"
+output: 
+  pdf_document:
+    number_sections: yes
+  html_document: default
+header-includes: \usepackage{float}
+  
+---
+
+# Freedman Problems
+
+# 1 Let Z be N(0,1) with density function
+
+## a.
+
+True. The definition of the cumulative density function is that it is the antiderivative of the probability distribution evaluated at a point. 
+
+## b.
+
+True. Integrating from 0 to x will give the area under the curve up to that point.
+
+## c.
+
+False, the probability of equaling exactly x in a continuous function is infiniteseimally small.
+
+## d.
+
+True. The area represents the sum of the probability that lies below x.
+
+## e.
+
+True. See above.
+
+## f.
+
+True. Incrementally by a small $h$ gives a close approximation of the point estimate for the probability that Z = x.
+
+# 2.
+
+## a.
+
+$X_i$ is the matrix of predictor of variables, and $\beta$ is the vector of slope coefficients
+
+## b.
+
+Random and Latent variable
+
+## c. 
+
+$U_i$ should be distributed iid $N(0,1)$.
+
+## d.
+
+Sum; Term; Subject
+
+# 3.
+
+False, .1 is the difference between the predicted probit output, but we need to apply the inverse Gaussian transformation to get probabilities (R code in .rmd file). In actuality, the difference in probabilities is $\phi(.29) - \phi(.19) = .614 - .575 = .039$
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+beta1 <- -.35
+educ <- .02
+inc <- 1/100000
+beta4 <- -.1
+
+George <- beta1 + educ*12 + inc*40000 + beta4
+Harry <- beta1 + educ*12 + inc*50000 + beta4
+
+pnorm(Harry) - pnorm(George)
+```
+
+# Hoaglin and Welsch
+
+First start with the Sherman Morrison Formula:
+
+$(A + uv^T)^{-1} = A^{-1} - \frac{A^{-1}uv^TA^{-1}}{1 + v^TA^{-1}u}$
+
+The equation assumes that $A$ is an invertible square matrix, and that $u$ and $v$ are $n * 1$ vectors.
+
+## Prove Equation 5.1:
+
+Equation to prove:
+$(X^T_{(i)}X_{(i)})^{-1} = (X^TX)^{-1} + \frac{(X^TX)^{-1}x_i^Tx_i(X^TX)^{-1}}{1 - h_i}$
+
+*Step 1*: Assume we start with a full-rank covariance matrix:
+
+$cov(b) = (X^TX)^{-1}$
+
+Then, imagine we remove row $i$ from the matrix. Denote this as:
+
+$(X_{(i)}^TX_{(i)})^{-1}$
+
+*Step 2*: This be rewritten as:
+
+$(X^TX - x_ix^T_i)^{-1}$ where $x_i$ denotes the deleted row vector that has been subtracted out.
+
+*Step 3*: Reverse the signs on Sherman Formula and plug in:
+
+$(X^T_{(i)}X_{(i)})^{-1} = (X^TX - x_ix^T_i)^{-1} = (X^TX)^{-1} + \frac{(X^TX)^{-1}x_i^Tx_i(X^TX)^{-1}}{1 - x_i^T(X^TX)^{-1}x_i}$
+
+We can take this step because the Sherman formula requires that "A" be a invertible square matrix and $uv^T$ be $n$ vectors. $(X^TX)^{-1}$ produces an invertible square matrix, and $x_i$ is definitionally a $1*n$ vector because it is one deleted row. The denominator in the last equation can be rewritten as:
+
+$1 - x_i^T(X^TX)^{-1}x_i = 1 - H_{i}$
+
+*Step 4*: Therefore the two expressions are equivalent.
+
+$(X^T_{(i)}X_{(i)})^{-1} = (X^TX + x_ix_i^T)$
+
+## Prove Equation 5.5
+
+Equation to Prove:
+$\hat{\beta} - \hat{\beta_i} = \frac{(X^TX)^{-1}x_i^Tr_i}{1 - h_i}$
+
+*Step 1*: Definition of $\beta$
+$\hat{\beta} = (X^TX)^{-1}X^Ty$ 
+
+*Step 2*: Define $\beta_{(i)}$
+$\hat{\beta}_{(i)} = (X^T_{(i)}X_{(i)})^{-1}X_{(i)}^Ty_{(i)})$
+
+$\hat{\beta}_{(i)} = (X^TX - x_ix^T_i)^{-1}X_{(i)}^Ty_{(i)})$
+
+*Step 3*: Subtract $\beta_{(i)}$ from the left side
+$\hat{\beta} = (X^TX)^{-1} + \frac{(X^TX)^{-1}x_i^Tx_i(X^TX)^{-1}}{1 - x_i^T(X^TX)^{-1}x_i}X_{(i)}^Ty_{(i)})$
+
+$(X^TX)^{-1} + \frac{(X^TX)^{-1}x_i^Tx_i(X^TX)^{-1}X_{(i)}^Ty_{(i)})}{1 - x_i^T(X^TX)^{-1}x_i}$
+
+*Step 4*: Recall that: $\hat{\beta} = (X^TX)^{-1}X^Ty$
+
+So we can simplify: 
+
+$(X^TX)^{-1} + \frac{(X^TX)^{-1}x_i^Tx_i\hat{\beta})}{1 - x_i^T(X^TX)^{-1}x_i}$
+
+*Step 5*: $x_i\hat{\beta}$ is definition of $r_i$ (the vector of residuals), so:
+
+$\hat{\beta} - \hat{\beta_i} = \frac{(X^TX)^{-1}x_i^Tr_i}{1 - h_i}$
+

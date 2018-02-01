@@ -1,0 +1,328 @@
+---
+title: "Homework 3"
+author: |
+  | Aniket Kesari
+  | 25948127
+  | UC Berkeley
+date: "October 16, 2017"
+output:
+  pdf_document: default
+  html_document: default
+  number_sections: TRUE
+---
+
+# EM Algorithm
+
+Suppose $X_1,...,X_n$ are i.i.d. observations from a mixture of two Poisson distributions:
+
+$P_0(X) = \frac{\mu_0^Xe^{-\mu_0}}{X!}$
+
+$P_1(X) = \frac{\mu_1^Xe^{-\mu_1}}{X!}$
+
+with mixing probabilities of $\pi$ and $1 - \pi$ (i.e. there is an intial probability that an observation $X_i$ is drawn from $P_0$ and a probability of $1-\pi$ from $P_1$)
+
+## Define the complete data vector and the distribution of the missing random variable
+
+The parameters I am estimating:
+
+$\theta = (\pi, \mu_0, \mu_1)$
+
+The complete data vector is:
+
+$[X, Y, Z]$
+
+Where $X$ is the observed data, $Y$ is the observed outcome data, and $Z$ is the latent variable matrix.
+
+## Write down the E and M steps for estimating $\mu_0$, $\mu_1$, $\pi$
+
+### E-Step
+
+1. First, define the likelihood of observing X given the parameters is defined as the sum (over the number of components) of the mixing distributions, multiplied by the density functions, for the observed data given the parameters.
+
+$L(X; \theta) = \sum_{j=1}^2p_jg_j(X;\mu_k)$
+
+2. Because both of the groups are coming from Poisson distributions, we can express this in terms of a product.
+
+$L(X; \theta) = \prod_{i=1}^n\sum_{j=1}^2p_jg(X_i;\mu_j)$
+
+3. Re-writing again into a log like-lihood:
+
+$loglik(X;\theta) = log\prod_{i=1}^n\sum_{j=1}^2p_jg(X_i,\mu_j) = \sum_{i=1}^{n}log\sum_{j=1}^2p_jg(X_i;\mu_j)$
+
+Again $g(x;\mu) = \frac{\mu^x}{x!}e^{-\mu}$
+
+4. The problem can be summarized as: $\theta^* = argmax_{\theta}loglik(X;\theta)$
+
+5. Define:
+
+$q(j,i) = p_jg(X_i,\mu_j)$ as the joint probability of selecting component $p_j$ and selecting an observation from that component $(g(X_i;\mu_i))$.
+
+6. Define:
+
+$p(j|i) = \frac{q(j,i)}{\sum_m}^2q(m,i)$ where $m$ is the "membership indicator," therefore this entire expression can be considered the "membership probability." More simply, this states the probability that a given $X_i$ is a member of component $j$.
+
+7. Jensen's inequality states that:
+
+$log\sum_{j=1}^2\pi_j\alpha_j \geq \sum_{j=1}^2\pi_jlog\alpha_j$
+
+This says that the log of a sum is always greater than or equal to the sum of a log. Given this, we can rewrite:
+
+$log\sum_{j=1}^2c_j = log\sum_{j=1}^2c_k\frac{\pi_j}{\pi_j} = log\sum_{j=1}^2\pi_j\frac{c_j}{\pi_j} \geq \sum_{j=1}^2\pi_jlog\frac{c_j}{\pi_j}$
+
+Restating the E-step:
+
+$p(j|i) = \frac{p_jg(X_i;\mu_j)}{\sum_m^2p_jg(X_i;\mu_j)}$
+
+Applying Jensen's inequality to this:
+
+$loglik(X;\theta) = \sum_{i=1}^nlog\sum_{j=1}^2q(j,i) \geq \sum_{i=1}^n\sum_{j=1}^2p(j|i)log\frac{q(j,i)}{p(j|i)} = b(\theta)$
+
+In words, this basically says that the loglikelihood of observing the data given the parameters is bounded by the double summation of the member probability, multiplied by the likelihood of observing membership given the Poisson distribution over the total membership probability.
+
+8. Expanding the log:
+
+$b(\theta) = \sum_{i=1}^n\sum_{j=1}^2p(k|i)logq(j,i) - \sum_{i=1}^n\sum_{j=1}^2p(j|i)logp(j|i)$
+
+The membership probability values are fixed, so we can drop these from the function. Now:
+
+$Q(\theta) = \sum_{i=1}^n\sum_{j=1}^2p(j|i)logq(j,i)$
+
+### M-Step
+
+The process for maximizing is:
+
+1. Differentiate $Q$ with respect to $\theta_i$
+2. Set the derivative equal to 0
+3. Solve for $\theta_i$
+
+1. Differentiate
+
+$\frac{\delta Q}{\delta \mu_j} = \frac{\delta}{\delta \mu_j}\sum_{i=1}^n\sum_{m}^2p(m|i)logq(m,i)$
+
+2. The derivative of a sum if the sum of derivatives, and $p(j|i)$ is a constant. Any term that does not involve $j$ is 0, so we can take these out:
+
+$\frac{\delta Q}{\delta \mu_j} = \sum_{i=1}^np(j|i)\frac{\delta}{\delta \mu_j}logq(j,i)$
+
+3. Replace $q$ (probability of component multiplied by density) and $g$ (Poisson density) with their definitions
+
+$\frac{\delta Q}{\delta \mu_j} = \sum_{i=1}^np(j|i)\frac{\delta}{\delta \mu_j}logp_jg(X_i:\mu_j$
+
+$\frac{\delta Q}{\delta \mu_j} = \sum_{i=1}^np(j|i)\frac{\delta}{\delta \mu_j}logp_j\frac{\mu_j^{X_i}}{X_i!}e^{-\mu_j}$
+
+4. Expand and simplify the log:
+
+$\frac{\delta Q}{\delta \mu_j} = \sum_{i=1}^np(j|i)\frac{\delta}{\delta \mu_j}logp_j + log\mu_k^{X_i} - logX_i! + loge^{-\mu_j}$
+
+$\frac{\delta Q}{\delta \mu_j} = \sum_{i=1}^np(j|i)\frac{\delta}{\delta \mu_j}logp_j + X_ilog\mu_j - logX_i! - \mu_j$
+
+5. Evaluate the derivative and set to 0
+
+$\frac{Q}{\delta \mu_j} = \sum_{i=1}^np(j|i)(\frac{X_i}{\mu_j} - 1) = 0$
+
+Distribute $p(j|l)$ and expand the sum:
+
+$0 = \sum_l^np(j|i)(\frac{X_i}{\mu_j}) - \sum_{i=1}^np(j|i)$
+
+$\sum_{i=1}^np(j|i) = \sum_l^np(j|i)(\frac{X_i}{\mu_j})$
+
+Pull out the constant:
+
+$\sum_{i=1}^np(j|i) = \frac{1}{\mu_j}\sum_{i=1}^np(j|i)X_i$
+
+Multiply both sides by $\mu_i$, and divde $\sum_{i=1}^np(j|i)$:
+
+$\mu_j = \frac{\sum_{i=1}^np(j|i)X_i}{\sum_{i=1}^np(j|i)}$
+
+We then iterate this procedure until we converge on an estimate for the parameter.
+
+## Give an initial estimator to start the EM algorithm
+
+I use k-means with two clusters as a starting point. K-means should perform fairly well in creating an initial separation of the data into two groups, even if it's not perfect. Because each iteration 
+
+## Write down the E and M steps if the second distribution is actually Bernoulli(p)
+
+The major difference between this problem and when the likelihood function is defined as:
+
+$L(X; \theta) = \sum_{j=1}^2p_jg_j(X;\mu_k)$
+
+We can't pull the $g_j$ terms into a product because they are not coming from the same distribution with different parameters.
+
+## Write R code to implement the E and M steps. Run it on some simulated data where you know the true parameters. Show the accuracy of clustering as you vary the values of $\mu_0$ and $\mu_1$
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library("tidyverse")
+library("knitr")
+
+# Simulate Data
+
+data <- rpois(10000, lambda = 10)
+
+# Hard labels with k-means
+
+## K-means then return cluster
+data.kmeans <- kmeans(data, 2)
+data.kmeans.cluster <- data.kmeans$cluster
+
+## Save into dataframe
+data.df <- data_frame(x = data, cluster = data.kmeans.cluster)
+
+## Mutate a row number column
+data.df <- data.df %>%
+  mutate(num = row_number()) 
+
+## Group by cluster and summarize the mean and size of each cluster
+data.summary.df <- data.df %>%
+  group_by(cluster) %>%
+  summarize(mu = mean(x), size = n())
+
+## Mixing Probabilities
+### Calculate mixing probability as the cluster size over the total number of observations
+data.summary.df <- data.summary.df %>%
+  mutate(alpha = size / sum(size))
+
+# Expectation Step
+
+## First mix
+comp1.prod <- 
+  dpois(data, data.summary.df$mu[1]) *
+  data.summary.df$alpha[1]
+
+## Second mix
+comp2.prod <- 
+  dpois(data, data.summary.df$mu[2]) *
+  data.summary.df$alpha[2]
+
+## Normalize each mix and get posterior probabilities
+normalizer <- comp1.prod + comp2.prod
+comp1.post <- comp1.prod/normalizer
+comp2.post <- comp2.prod/normalizer
+
+## Sum posterior probabilities
+comp1.n <- sum(comp1.post)
+comp2.n <- sum(comp2.post)
+
+# Maximization Step
+
+## Inverse of sum of posterior probabilities multiplied by the sum of the posterior probabilities * each data point
+comp1.mu <- 1/comp1.n * sum(comp1.post * data)
+comp2.mu <- 1/comp2.n * sum(comp2.post * data)
+
+## Sum of posterior probabilities over the length of the data
+comp1.alpha <- comp1.n / length(data)
+comp2.alpha <- comp2.n / length(data)
+
+## Put the mean and mixing probabilities into a dataframe
+comp.params.df <- data.frame(comp = c("comp1", "comp2"),
+                             comp.mu = c(comp1.mu, comp2.mu),
+                             comp.alpha = c(comp1.alpha, comp2.alpha))
+
+## Log likelihood of the sum of the mixes
+sum.of.comps <- comp1.prod + comp2.prod
+sum.of.comps.ln <- log(sum.of.comps, base = exp(1))
+sum(sum.of.comps.ln)
+
+# EM Algorithm in a function
+
+## E-Step function
+
+e_step <- function(x, mu.vector, alpha.vector) {
+  comp1.prod <- dpois(x, mu.vector[1]) * alpha.vector[1]
+  comp2.prod <- dpois(x, mu.vector[2]) * alpha.vector[2]
+  sum.of.comps <- comp1.prod + comp2.prod
+  comp1.post <- comp1.prod / sum.of.comps
+  comp2.post <- comp2.prod / sum.of.comps
+  
+  sum.of.comps.ln <- log(sum.of.comps, base = exp(1))
+  sum.of.comps.ln.sum <- sum(sum.of.comps.ln)
+  
+  list("loglik" = sum.of.comps.ln.sum,
+       "posterior.df" = cbind(comp1.post, comp2.post))
+}
+
+## M-Step function
+
+m_step <- function(x, posterior.df) {
+  comp1.n <- sum(posterior.df[, 1])
+  comp2.n <- sum(posterior.df[, 2])
+  
+  comp1.mu <- 1/comp1.n * sum(posterior.df[, 1] * x)
+  comp2.mu <- 1/comp2.n * sum(posterior.df[, 2] * x)
+  
+  comp1.var <- sum(posterior.df[, 1] * (x - comp1.mu)^2) * 1/comp1.n
+  comp2.var <- sum(posterior.df[, 2] * (x - comp2.mu)^2) * 1/comp2.n
+  
+  comp1.alpha <- comp1.n / length(x)
+  comp2.alpha <- comp2.n / length(x)
+  
+  list("mu" = c(comp1.mu, comp2.mu),
+       "alpha" = c(comp1.alpha, comp2.alpha))
+}
+
+## For Loop
+for (i in 1:50) {
+  if (i == 1) {
+    # Initialization
+    e.step <- e_step(data, data.summary.df[["mu"]], 
+                     data.summary.df[["alpha"]])
+    m.step <- m_step(data, e.step[["posterior.df"]])
+    cur.loglik <- e.step[["loglik"]]
+    loglik.vector <- e.step[["loglik"]]
+  } else {
+    # Repeat E and M steps until convergence
+    e.step <- e_step(data, m.step[["mu"]],  
+                     m.step[["alpha"]])
+    m.step <- m_step(data, e.step[["posterior.df"]])
+    loglik.vector <- c(loglik.vector, e.step[["loglik"]])
+    
+    loglik.diff <- abs((cur.loglik - e.step[["loglik"]]))
+    if(loglik.diff < 1e-6) {
+      break
+    } else {
+      cur.loglik <- e.step[["loglik"]]
+    }
+  }
+}
+## Show results
+kable(loglik.vector, format = "latex")
+
+## Plot underneath the curves
+plot_mix_comps <- function(x, mu, lam) {
+  lam * dpois(x, mu)
+}
+
+data.frame(x = data) %>%
+  ggplot() +
+  geom_density(aes(x, ..density..), colour = "black", 
+                 fill = "white") +
+  geom_line(aes(x = data, y = dpois(data, m.step$mu[1] * m.step$alpha[1]), colour = "red")) +
+  geom_line(aes(x = data, y = dpois(data, m.step$mu[2]) * m.step$alpha[2], colour = "blue")) +
+  ylab("Density") +
+  xlab("Values") +
+  ggtitle("Poisson Mixture Fit") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background =              element_blank(), legend.position = "none") 
+
+```
+
+The "loglik.vector" object (printed here) shows that the EM algorithm converges pretty quickly to approximately -25,600 (across several simulations).
+
+## How would you create confidence intervals? Can you use asymptotic normality?
+
+I can create confidence intervals for the inferred parameters $\mu_0$ and $\mu_1$ by calculating the Information Matrix for the sample, and then applying the following formula:
+
+$\hat{\theta} \pm Z_{\frac{\alpha}{2}}\frac{1}{\sqrt{I(\theta)}}$
+
+Where $\hat{\theta}$ is the predicted parameter. The logic here is that the distribution of Maximum Likelihood Estimators are asymptoptically normal with mean $\theta$ and variance $\theta$. The inverse of the Fisher Information Matrix ($I(\theta)$) of the sample approximates these features, therefore using asymptotic normality to derive the estimate.
+
+# The Linear Model in the Neyman-Rubin Framework
+
+Basic model: $Y_i = T_ia_i + (1 - T_i)b_i$
+
+Rewritten model: $Y_i = \bar{a}T_i + \bar{b}(1-T_i) + Q_a(z_i = \bar{z})T_i + Q_b(z_i - \bar{z})(1 - T_i) + \epsilon_i$
+
+## In your own words, give an interpretation of each term in this decomposition. What are the predictors in the model? What is the response? What are the error terms, and are they i.i.d.?
+
+The predictors in the model are the population average under treatment or control (meaning either a or b, depending on the indicator on treatment), and the covariate under treatment or control (again depending on the indicator). The response is the individual "y," or the observed outcome for the unit, and the error terms are deviations between the observed individual point (again under treatment or control) and the predicted one (found by adding the population average to the constant adjusted covariate). The error terms are not i.i.d. because they are dependent on the indicator.
+
+## How should you choose $Q_a$ and $Q_b$? Justify your choice.
+
+$Q_a$ and $Q_b$ could be chosen with a propensity score matching method. Essentially, the idea behind the constant adjustment is to make sure that the covariates are balanced across both treatment and control groups (thus making the only difference between paired units whether they received treatment or not). Propensity score matching provides a useful way to match observations under control to observations under treatment based on similarity distance across the covariates.

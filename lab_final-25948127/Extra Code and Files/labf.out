@@ -1,0 +1,208 @@
+
+R version 3.4.3 (2017-11-30) -- "Kite-Eating Tree"
+Copyright (C) 2017 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> # Load Libraries
+> #install.packages("foba")
+> #install.packages("lars")
+> #install.packages("ranger")
+> library(tidyverse)
+Loading tidyverse: ggplot2
+Loading tidyverse: tibble
+Loading tidyverse: tidyr
+Loading tidyverse: readr
+Loading tidyverse: purrr
+Loading tidyverse: dplyr
+Conflicts with tidy packages ---------------------------------------------------
+filter(): dplyr, stats
+lag():    dplyr, stats
+> library(caret)
+Loading required package: lattice
+
+Attaching package: ‘caret’
+
+The following object is masked from ‘package:purrr’:
+
+    lift
+
+> library(rgl)
+Warning messages:
+1: In rgl.init(initValue, onlyNULL) : RGL: unable to open X11 display
+2: 'rgl_init' failed, running with rgl.useNULL = TRUE 
+> #library(HDCI)
+> #library(corrplot)
+> #library(superheat)
+> library(pROC)
+Type 'citation("pROC")' for a citation.
+
+Attaching package: ‘pROC’
+
+The following objects are masked from ‘package:stats’:
+
+    cov, smooth, var
+
+> library(glmnet)
+Loading required package: Matrix
+
+Attaching package: ‘Matrix’
+
+The following object is masked from ‘package:tidyr’:
+
+    expand
+
+Loading required package: foreach
+
+Attaching package: ‘foreach’
+
+The following objects are masked from ‘package:purrr’:
+
+    accumulate, when
+
+Loaded glmnet 2.0-10
+
+
+Attaching package: ‘glmnet’
+
+The following object is masked from ‘package:pROC’:
+
+    auc
+
+> #library(foba)
+> library(lars)
+Loaded lars 1.2
+
+> library(ranger)
+> library(doParallel)
+Loading required package: iterators
+Loading required package: parallel
+> 
+> ## Load Data
+> load("~/stat215a/lab_final/data/fMRIdata.RData")
+> #fit_stim <- read_csv("C:/Users/Anike/Desktop/fit_stim.csv")
+> #real_wav <- read_csv("C:/Users/Anike/Desktop/real_wav.csv")
+> 
+> 
+> # Data Cleaning/Processing
+> 
+> # Add column names to feature dataframe
+> fit_feat <- as.data.frame(fit_feat)
+> val_feat <- as.data.frame(val_feat)
+> loc_dat <- as.data.frame(loc_dat)
+> resp_dat <- as.data.frame(resp_dat)
+> 
+> # Rename columns to take form "feature_#"
+> fit_feat <- fit_feat %>%
++   rename_all(
++     funs(
++       stringr::str_to_lower(.) %>%
++         stringr::str_replace_all("^v", 'feature.')
++     )
++   )
+> 
+> val_feat <- val_feat %>%
++   rename_all(
++     funs(
++       stringr::str_to_lower(.) %>%
++         stringr::str_replace_all("^v", 'feature.')
++     )
++   )
+> 
+> #real_wav <- real_wav %>%
+> #  rename_all(
+> #    funs(
+> #      stringr::str_to_lower(.) %>%
+> #        stringr::str_replace_all("^v", "feature.")
+> #    )
+> #  )
+> 
+> # Add voxel IDs
+> 
+> loc_dat <- loc_dat %>%
++   mutate(voxel_id = paste0('voxel.', row_number())) %>%
++   rename(X = V1, Y = V2, Z = V3)
+> 
+> resp_dat <- resp_dat %>%
++   rename_all(
++     funs(
++       stringr::str_to_lower(.) %>%
++         stringr::str_replace_all("^v", "voxel.")
++     )
++   )
+> 
+> # Create a Master Dataset
+> 
+> master_data <- resp_dat %>%
++   bind_cols(fit_feat)
+> 
+> # Exploratory Data Analysis
+> 
+> # Partititon the Data
+> 
+> # Create partitions
+> 
+> inTrain <- createDataPartition(y = master_data$voxel.1,
++                                p = .6,
++                                list = FALSE)
+> 
+> ## Training
+> 
+> training <- master_data[inTrain,]
+> 
+> ## Validation and Test Sets
+> temp <- master_data[-inTrain,]
+> inTemp <- createDataPartition(y = temp$voxel.1,
++                               p = .5,
++                               list = FALSE)
+> 
+> validation <- temp[inTemp, ]
+> testing <- temp[-inTemp, ]
+> 
+> # Fit ML Models
+> no_cores <- detectCores() - 1
+> cl <- makeCluster(no_cores)  
+> registerDoParallel(cl)
+> 
+> rctrl1 <- trainControl(method = "cv", number = 3, allowParallel = TRUE)
+> 
+> fitModel <- function(data, method, control) {
++   positions <- c(i, 21:10941)
++   train_set <- data %>%
++     select(positions) 
++   zero_var_cols <- nearZeroVar(train_set)
++   train_set <- train_set %>%
++     select(-zero_var_cols)
++   m_fit <- train(as.formula(paste0("voxel.", i, " ~ .")),
++                  data = train_set,
++                  method = method,
++                  preProc = c("center", "scale"),
++                  trControl = control)
++ }
+> 
+> rf.model.list <- list()
+> rf.model.list <- foreach(i = 1:20, .packages = c("tidyverse", "caret", "ranger")) %dopar% {
++   fitModel(training, "ranger", rctrl1)
++ }
+> 
+> preds.rf <- foreach(i = 1:20) %dopar% {
++   predict(rf.model.list[[i]], newdata = validation)
++ }
+Error in serialize(data, node$con) : ignoring SIGPIPE signal
+Calls: %dopar% ... postNode -> sendData -> sendData.SOCKnode -> serialize
+Execution halted
+Warning message:
+system call failed: Cannot allocate memory 
